@@ -7,7 +7,7 @@ import os
 # ================= 配置区域 =================
 # 输入：WC98 Day 73 的原始 CSV 路径
 # (确保这个 CSV 里有 timestamp, clientID, size 这三列)
-INPUT_WC_CSV = '/data/exp/hrliu/1998WC/WorldCupCSV/wc_day73_1.csv' 
+INPUT_WC_CSV = '/data/exp/hrliu/1998WC/WorldCupCSV/wc_day73_6.csv' 
 
 # 输出：处理好并筛选过的特征文件
 OUTPUT_CSV = './wc98_flash_event_features.csv'
