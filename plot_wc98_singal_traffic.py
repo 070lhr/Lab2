@@ -6,10 +6,10 @@ import sys
 
 # ================= 配置区域 =================
 # 输入文件路径 (请确认路径是否正确)
-INPUT_CSV = '/data/exp/hrliu/WC98/wc_day73_1.csv'
+INPUT_CSV = '/data/exp/hrliu/1998WC/WorldCupCSV/wc_day73_6.csv'
 
 # 输出图片文件名
-OUTPUT_IMG = './wc98_day73_traffic_rate.png'
+OUTPUT_IMG = './wc98_day73_6_traffic_rate.png'
 
 # 筛选阈值线 (可选): 在图中画一条红线，表示您筛选 Flash Event 的门槛
 # 例如：只看每秒请求数 > 2000 的部分
