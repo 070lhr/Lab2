@@ -1,94 +1,141 @@
 #!/usr/bin/env python3
 import pandas as pd
 import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
 import os
+import glob
+import re
 import sys
 
 # ================= 配置区域 =================
-# 输入文件路径 (请确认路径是否正确)
-INPUT_CSV = '/data/exp/hrliu/1998WC/WorldCupCSV/wc_day73_1.csv'
+# 输入：包含所有 CSV 文件的目录路径
+INPUT_DIR = '/data/exp/hrliu/1998WC/WorldCupCSV/'
 
-# 输出图片文件名
-OUTPUT_IMG = './wc98_day73_traffic_rate.png'
+# 输出：图片保存路径
+OUTPUT_IMG = './wc98_day71_74_traffic.png'
 
-# 筛选阈值线 (可选): 在图中画一条红线，表示您筛选 Flash Event 的门槛
-# 例如：只看每秒请求数 > 2000 的部分
-THRESHOLD = 2000 
+# 筛选范围：只保留这几天的数据
+TARGET_DAYS = [71, 72, 73, 74]
 # ===========================================
 
-def plot_traffic_rate(input_path, output_path):
-    print(f"[*] 正在读取数据: {input_path} ...")
+def get_sorted_target_files(directory, target_days):
+    """
+    获取目录下指定天数(target_days)的csv文件，并按文件名排序。
+    """
+    files = glob.glob(os.path.join(directory, "*.csv"))
+    target_files = []
     
-    if not os.path.exists(input_path):
-        print(f"[!] 错误: 找不到文件 {input_path}")
-        return
+    # 定义正则提取 day 和 part
+    pattern = re.compile(r'day(\d+)_(\d+)')
 
-    try:
-        # 只读取 timestamp 列，速度最快且省内存
-        # 如果您的 CSV 没有表头，pandas 可能会把第一行当表头，
-        # 所以保险起见，我们尝试手动指定列名读取，或者假设有表头
-        # 这里使用一种通用策略：先读几行看看
-        df_test = pd.read_csv(input_path, nrows=5)
-        if 'timestamp' in df_test.columns:
-            df = pd.read_csv(input_path, usecols=['timestamp'])
-        else:
-            # 假设没有表头，第一列是 timestamp
-            print("[*] 未检测到表头，假设第一列为时间戳...")
-            df = pd.read_csv(input_path, usecols=[0], names=['timestamp'], header=None)
+    for f in files:
+        filename = os.path.basename(f)
+        match = pattern.search(filename)
+        if match:
+            day = int(match.group(1))
+            part = int(match.group(2))
             
-    except Exception as e:
-        print(f"[!] 读取失败: {e}")
+            # 核心筛选：只保留 target_days 里的天数
+            if day in target_days:
+                target_files.append((day, part, f))
+    
+    # 按 (day, part) 排序
+    target_files.sort(key=lambda x: (x[0], x[1]))
+    
+    # 只返回文件路径
+    return [x[2] for x in target_files]
+
+def plot_specific_days(input_dir, output_img):
+    print(f"[*] 正在扫描目录: {input_dir}")
+    print(f"[*] 目标天数: {TARGET_DAYS}")
+    
+    # 1. 获取筛选后的文件列表
+    files_to_process = get_sorted_target_files(input_dir, TARGET_DAYS)
+    
+    if not files_to_process:
+        print(f"[!] 错误: 未找到 Day {TARGET_DAYS} 的任何 .csv 文件！")
         return
 
-    print(f"[*] 数据加载完成，共 {len(df)} 条记录。正在计算每秒速率...")
+    print(f"[*] 找到 {len(files_to_process)} 个相关文件，开始处理...")
+    
+    daily_stats_list = []
+    total_requests = 0
 
-    # === 核心计算：每秒有多少行 ===
-    # value_counts() 比 groupby().size() 通常要快一点
-    rate_series = df['timestamp'].value_counts().sort_index()
-    
-    # 转换为 DataFrame 方便绘图
-    rate_df = rate_series.reset_index()
-    rate_df.columns = ['timestamp', 'requests_per_second']
-    
-    # 将时间戳转换为相对时间 (从第0秒开始)，这样图表更好看
-    # 或者保留原始时间戳，看您需求。这里用相对时间展示“一天内的趋势”
-    start_time = rate_df['timestamp'].min()
-    rate_df['relative_time'] = rate_df['timestamp'] - start_time
-    
-    print("[*] 正在绘图...")
-    
-    # 设置画布风格
-    plt.figure(figsize=(12, 6), dpi=300)
-    
-    # 绘制折线图
-    # 颜色选用 'royalblue' (宝蓝色)，学术论文常用色
-    plt.plot(rate_df['relative_time'], rate_df['requests_per_second'], 
-             color='royalblue', linewidth=0.8, label='Traffic Rate')
-
-    # === 可视化筛选阈值 (可选) ===
-    if THRESHOLD > 0:
-        plt.axhline(y=THRESHOLD, color='red', linestyle='--', linewidth=1.5, 
-                    label=f'Flash Event Threshold ({THRESHOLD} req/s)')
+    # 2. 循环读取并聚合
+    for i, file_path in enumerate(files_to_process):
+        file_name = os.path.basename(file_path)
+        sys.stdout.write(f"\r[{i+1}/{len(files_to_process)}] 正在处理: {file_name} ...")
+        sys.stdout.flush()
         
-        # 统计一下有多少点超过了阈值
-        peak_points = rate_df[rate_df['requests_per_second'] > THRESHOLD]
-        print(f"[*] 统计: 共有 {len(peak_points)} 秒的流量超过了阈值 {THRESHOLD}。")
+        try:
+            # 尝试读取 timestamp 列
+            try:
+                # 预读一行检测表头
+                df_test = pd.read_csv(file_path, nrows=1)
+                if 'timestamp' in df_test.columns:
+                    df = pd.read_csv(file_path, usecols=['timestamp'])
+                else:
+                    # 无表头，假设第一列是时间戳
+                    df = pd.read_csv(file_path, usecols=[0], names=['timestamp'], header=None)
+            except:
+                # 兜底
+                df = pd.read_csv(file_path, usecols=[0], names=['timestamp'], header=None)
 
-    # 设置标签和标题
-    plt.title('World Cup 98 (Day 73) Traffic Rate Over Time', fontsize=14, fontweight='bold')
-    plt.xlabel('Time (Seconds from start)', fontsize=12)
+            # 计算每秒请求数
+            counts = df['timestamp'].value_counts().sort_index()
+            daily_stats_list.append(counts)
+            total_requests += len(df)
+            
+            del df
+
+        except Exception as e:
+            print(f"\n[!] 读取文件 {file_name} 失败: {e}")
+
+    print(f"\n[*] 读取完毕，正在合并数据...")
+
+    # 3. 合并与绘图
+    if not daily_stats_list:
+        return
+
+    full_series = pd.concat(daily_stats_list)
+    # 按时间戳合并重叠部分
+    full_series = full_series.groupby(level=0).sum().sort_index()
+    
+    df_plot = full_series.reset_index()
+    df_plot.columns = ['timestamp', 'count']
+    df_plot['datetime'] = pd.to_datetime(df_plot['timestamp'], unit='s')
+
+    print("[*] 正在绘图...")
+
+    plt.figure(figsize=(15, 6), dpi=300) # 宽图
+    
+    # 绘制折线
+    plt.plot(df_plot['datetime'], df_plot['count'], color='#1f77b4', linewidth=0.8, label='Request Rate')
+    
+    plt.title(f'World Cup 98 Traffic Rate (Day {min(TARGET_DAYS)} - Day {max(TARGET_DAYS)})', fontsize=16, fontweight='bold')
+    plt.xlabel('Date / Time', fontsize=12)
     plt.ylabel('Requests / Second', fontsize=12)
     
-    # 设置网格
-    plt.grid(True, linestyle=':', alpha=0.6)
-    plt.legend(loc='upper right')
-    
-    # 优化刻度显示
-    plt.tight_layout()
+    # X轴格式化：精确到小时
+    plt.gca().xaxis.set_major_formatter(mdates.DateFormatter('%m-%d %H:00'))
+    plt.gca().xaxis.set_major_locator(mdates.HourLocator(interval=6)) # 每6小时一个刻度
+    plt.gcf().autofmt_xdate()
 
-    # 保存图片
-    plt.savefig(output_path)
-    print(f"[*] 绘图完成！图片已保存至: {os.path.abspath(output_path)}")
+    plt.grid(True, linestyle='--', alpha=0.5)
+    plt.legend()
+    
+    # 标记出这几天的最高峰
+    max_rate = df_plot['count'].max()
+    max_time = df_plot.loc[df_plot['count'].idxmax(), 'datetime']
+    plt.annotate(f'Peak: {max_rate}\n({max_time.strftime("%d %H:%M")})', 
+                 xy=(max_time, max_rate), 
+                 xytext=(max_time, max_rate + 200),
+                 arrowprops=dict(facecolor='red', shrink=0.05),
+                 color='red', fontweight='bold')
+
+    plt.tight_layout()
+    plt.savefig(output_img)
+    print(f"[*] 绘图完成！图片已保存至: {os.path.abspath(output_img)}")
 
 if __name__ == "__main__":
-    plot_traffic_rate(INPUT_CSV, OUTPUT_IMG)
+    plot_specific_days(INPUT_DIR, OUTPUT_IMG)
