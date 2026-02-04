@@ -19,7 +19,7 @@ LABEL = 1
 
 # 限制：为了防止跑太久，设置最大处理秒数 (例如 3000秒)
 # 如果想跑全量数据，请将此值改为 None
-MAX_SECONDS = None
+MAX_SECONDS = 3000
 # ===========================================
 
 def calculate_entropy(ip_list):

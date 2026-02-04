@@ -1,114 +1,94 @@
+#!/usr/bin/env python3
 import pandas as pd
 import matplotlib.pyplot as plt
-import matplotlib.dates as mdates
-import glob
 import os
+import sys
 
 # ================= 配置区域 =================
-# CSV 文件所在的目录
-INPUT_DIR = './WorldCupCSV'
+# 输入文件路径 (请确认路径是否正确)
+INPUT_CSV = '/data/exp/hrliu/1998WC/WorldCupCSV/wc_day73_1.csv'
 
-# 图片保存路径
-OUTPUT_IMAGE = 'wc98_traffic_analysis.png'
+# 输出图片文件名
+OUTPUT_IMG = './wc98_day73_traffic_rate.png'
+
+# 筛选阈值线 (可选): 在图中画一条红线，表示您筛选 Flash Event 的门槛
+# 例如：只看每秒请求数 > 2000 的部分
+THRESHOLD = 2000 
 # ===========================================
 
-def load_and_aggregate():
-    # 找到所有 CSV 文件
-    all_files = sorted(glob.glob(os.path.join(INPUT_DIR, "*.csv")))
+def plot_traffic_rate(input_path, output_path):
+    print(f"[*] 正在读取数据: {input_path} ...")
     
-    if not all_files:
-        print(f"错误：在 {INPUT_DIR} 下未找到任何 .csv 文件！")
-        return None
+    if not os.path.exists(input_path):
+        print(f"[!] 错误: 找不到文件 {input_path}")
+        return
 
-    print(f"找到 {len(all_files)} 个 CSV 文件，开始处理...")
+    try:
+        # 只读取 timestamp 列，速度最快且省内存
+        # 如果您的 CSV 没有表头，pandas 可能会把第一行当表头，
+        # 所以保险起见，我们尝试手动指定列名读取，或者假设有表头
+        # 这里使用一种通用策略：先读几行看看
+        df_test = pd.read_csv(input_path, nrows=5)
+        if 'timestamp' in df_test.columns:
+            df = pd.read_csv(input_path, usecols=['timestamp'])
+        else:
+            # 假设没有表头，第一列是 timestamp
+            print("[*] 未检测到表头，假设第一列为时间戳...")
+            df = pd.read_csv(input_path, usecols=[0], names=['timestamp'], header=None)
+            
+    except Exception as e:
+        print(f"[!] 读取失败: {e}")
+        return
+
+    print(f"[*] 数据加载完成，共 {len(df)} 条记录。正在计算每秒速率...")
+
+    # === 核心计算：每秒有多少行 ===
+    # value_counts() 比 groupby().size() 通常要快一点
+    rate_series = df['timestamp'].value_counts().sort_index()
     
-    aggregated_chunks = []
+    # 转换为 DataFrame 方便绘图
+    rate_df = rate_series.reset_index()
+    rate_df.columns = ['timestamp', 'requests_per_second']
+    
+    # 将时间戳转换为相对时间 (从第0秒开始)，这样图表更好看
+    # 或者保留原始时间戳，看您需求。这里用相对时间展示“一天内的趋势”
+    start_time = rate_df['timestamp'].min()
+    rate_df['relative_time'] = rate_df['timestamp'] - start_time
+    
+    print("[*] 正在绘图...")
+    
+    # 设置画布风格
+    plt.figure(figsize=(12, 6), dpi=300)
+    
+    # 绘制折线图
+    # 颜色选用 'royalblue' (宝蓝色)，学术论文常用色
+    plt.plot(rate_df['relative_time'], rate_df['requests_per_second'], 
+             color='royalblue', linewidth=0.8, label='Traffic Rate')
 
-    for i, file in enumerate(all_files):
-        print(f"[{i+1}/{len(all_files)}] 正在读取并聚合: {os.path.basename(file)} ...", end='\r')
+    # === 可视化筛选阈值 (可选) ===
+    if THRESHOLD > 0:
+        plt.axhline(y=THRESHOLD, color='red', linestyle='--', linewidth=1.5, 
+                    label=f'Flash Event Threshold ({THRESHOLD} req/s)')
         
-        try:
-            # 只读取需要的列以节省内存
-            # timestamp: 用于分组
-            # size: 用于计算流量和请求数(count)
-            df = pd.read_csv(file, usecols=['timestamp', 'size'])
-            
-            # 按秒聚合
-            # count: 这一秒有多少行 = 请求数
-            # sum: 这一秒 size 总和 = 流量
-            df_agg = df.groupby('timestamp')['size'].agg(['count', 'sum']).reset_index()
-            df_agg.rename(columns={'count': 'request_count', 'sum': 'traffic_bytes'}, inplace=True)
-            
-            aggregated_chunks.append(df_agg)
-            
-        except Exception as e:
-            print(f"\n[跳过] 文件 {file} 读取失败: {e}")
+        # 统计一下有多少点超过了阈值
+        peak_points = rate_df[rate_df['requests_per_second'] > THRESHOLD]
+        print(f"[*] 统计: 共有 {len(peak_points)} 秒的流量超过了阈值 {THRESHOLD}。")
 
-    print("\n正在合并所有数据...")
+    # 设置标签和标题
+    plt.title('World Cup 98 (Day 73) Traffic Rate Over Time', fontsize=14, fontweight='bold')
+    plt.xlabel('Time (Seconds from start)', fontsize=12)
+    plt.ylabel('Requests / Second', fontsize=12)
     
-    if not aggregated_chunks:
-        print("没有有效的数据被加载。")
-        return None
-
-    # 合并所有小文件的聚合结果
-    full_df = pd.concat(aggregated_chunks, ignore_index=True)
+    # 设置网格
+    plt.grid(True, linestyle=':', alpha=0.6)
+    plt.legend(loc='upper right')
     
-    # 再次聚合（防止不同文件包含同一秒的数据）
-    final_df = full_df.groupby('timestamp').sum().reset_index()
-    
-    # 将 Unix 时间戳转换为 datetime 对象
-    final_df['datetime'] = pd.to_datetime(final_df['timestamp'], unit='s')
-    
-    # 按时间排序
-    final_df.sort_values('timestamp', inplace=True)
-    
-    return final_df
-
-def plot_traffic(df):
-    print("正在绘图...")
-    
-    # 设置画布大小
-    fig, ax1 = plt.subplots(figsize=(15, 7))
-    
-    # === 绘制左轴：请求数 (Requests/s) ===
-    color = 'tab:blue'
-    ax1.set_xlabel('Time (Date Hour)', fontsize=12)
-    ax1.set_ylabel('Request Rate (Reqs/sec)', color=color, fontsize=12)
-    ax1.plot(df['datetime'], df['request_count'], color=color, linewidth=1, label='Request Rate')
-    ax1.tick_params(axis='y', labelcolor=color)
-    ax1.grid(True, linestyle='--', alpha=0.5)
-
-    # === 绘制右轴：流量 (MB/s) ===
-    ax2 = ax1.twinx()  # 共享x轴
-    color = 'tab:orange'
-    # 将字节转换为 MB
-    traffic_mb = df['traffic_bytes'] / (1024 * 1024)
-    ax2.set_ylabel('Traffic Rate (MB/sec)', color=color, fontsize=12)
-    ax2.plot(df['datetime'], traffic_mb, color=color, linewidth=1, alpha=0.7, label='Traffic Rate')
-    ax2.tick_params(axis='y', labelcolor=color)
-
-    # === 设置标题和格式 ===
-    plt.title('World Cup 98 Traffic Analysis (Requests vs Traffic)', fontsize=16)
-    
-    # 格式化 X 轴时间显示 (例如: 06-10 12:00)
-    ax1.xaxis.set_major_formatter(mdates.DateFormatter('%m-%d %H:%M'))
-    ax1.xaxis.set_major_locator(mdates.AutoDateLocator())
-    fig.autofmt_xdate() # 自动旋转日期标签
+    # 优化刻度显示
+    plt.tight_layout()
 
     # 保存图片
-    plt.savefig(OUTPUT_IMAGE, dpi=300, bbox_inches='tight')
-    print(f"绘图完成！图片已保存为: {OUTPUT_IMAGE}")
-    
-    # 如果你在本地运行，可以取消下面这行的注释来显示图片
-    # plt.show()
+    plt.savefig(output_path)
+    print(f"[*] 绘图完成！图片已保存至: {os.path.abspath(output_path)}")
 
 if __name__ == "__main__":
-    df = load_and_aggregate()
-    
-    if df is not None and not df.empty:
-        print(f"总样本数 (秒): {len(df)}")
-        print("数据预览:")
-        print(df.head())
-        plot_traffic(df)
-    else:
-        print("数据为空，无法绘图。")
+    plot_traffic_rate(INPUT_CSV, OUTPUT_IMG)
