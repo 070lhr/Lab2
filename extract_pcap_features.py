@@ -19,7 +19,7 @@ LABEL = 1
 
 # 限制：为了防止跑太久，设置最大处理秒数 (例如 3000秒)
 # 如果想跑全量数据，请将此值改为 None
-MAX_SECONDS = 3000
+MAX_SECONDS = None
 # ===========================================
 
 def calculate_entropy(ip_list):
@@ -124,17 +124,27 @@ def extract_features(pcap_path, output_path, label=1, max_seconds=None):
         print(f"\n[!] 处理过程中发生错误: {e}")
         return
 
-    print(f"\n[*] 特征提取完成！共提取 {len(features_list)} 个样本 (秒)。")
+    print(f"\n[*] 基础特征提取完成！正在计算第4个特征(加速度)...")
     
-    # 转换为 DataFrame 并保存
+    # 转换为 DataFrame
     if features_list:
         df = pd.DataFrame(features_list)
-        # 调整列顺序
-        cols = ['timestamp', 'Rate', 'Size_Std', 'Entropy', 'Label']
+        
+        # ======================================================
+        # 新增代码：在这里直接计算第 4 个特征 (Accel)
+        # ======================================================
+        # Accel = 当前速率 - 上一秒速率 (使用 diff 函数)
+        # fillna(0) 是因为第一行没有上一秒，结果会是 NaN，需要填 0
+        df['Accel'] = df['Rate'].diff().fillna(0)
+        
+        # 调整列顺序，把 Accel 加进去
+        cols = ['timestamp', 'Rate', 'Size_Std', 'Entropy', 'Accel', 'Label']
         df = df[cols]
         
+        # 保存 CSV
         df.to_csv(output_path, index=False)
         print(f"[*] CSV 文件已保存至: {os.path.abspath(output_path)}")
+        print(f"[*] 包含特征: Rate, Size_Std, Entropy, Accel (共 {len(df)} 行)")
         print("\n数据预览 (前 5 行):")
         print(df.head())
     else:
