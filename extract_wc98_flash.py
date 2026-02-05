@@ -16,7 +16,7 @@ OUTPUT_CSV = './flash_event_expanded_73_74.csv'
 # 目标文件列表：覆盖完整的上升和下降周期
 # 注意：文件名必须严格按时间顺序排列
 TARGET_FILES = [
-    'wc_day73_2.csv', 'wc_day73_3.csv', 'wc_day73_4.csv', # 上升前夕 & 爬坡
+    'wc_day73_3.csv', 'wc_day73_4.csv', # 上升前夕 & 爬坡
     'wc_day73_5.csv', 'wc_day73_6.csv',                   # 爆发 & 峰值
     'wc_day74_1.csv', 'wc_day74_2.csv'                    # 回落 & 尾部
 ]
