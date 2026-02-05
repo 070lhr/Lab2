@@ -9,7 +9,7 @@ import sys
 
 # ================= 配置区域 =================
 # 输入：指定的绝对路径
-INPUT_PCAP = '/data/exp/hrliu/CIC2023/DDoS-HTTP_Flood-.pcap' 
+INPUT_PCAP = '/data/exp/hrliu/CIC2023/DDoS-UDP_Flood.pcap' 
 
 # 输出：保存到当前目录 (./)
 OUTPUT_CSV = './ciciot_http_flood_features.csv'
