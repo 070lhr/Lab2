@@ -9,10 +9,10 @@ import sys
 
 # ================= 配置区域 =================
 # 输入：指定的绝对路径
-INPUT_PCAP = '/data/exp/hrliu/CIC2023/DDoS-UDP_Flood.pcap' 
+INPUT_PCAP = '/data/exp/hrliu/CIC2023/DDoS-TCP_Flood.pcap' 
 
 # 输出：保存到当前目录 (./)
-OUTPUT_CSV = './ciciot_UDP_flood_features.csv'
+OUTPUT_CSV = './ciciot_TCP_flood_features.csv'
 
 # 标签：CICIoT2023 的攻击样本标记为 1
 LABEL = 1 
