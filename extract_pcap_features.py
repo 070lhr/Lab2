@@ -12,7 +12,7 @@ import sys
 INPUT_PCAP = '/data/exp/hrliu/CIC2023/DDoS-UDP_Flood.pcap' 
 
 # 输出：保存到当前目录 (./)
-OUTPUT_CSV = './ciciot_http_flood_features.csv'
+OUTPUT_CSV = './ciciot_UDP_flood_features.csv'
 
 # 标签：CICIoT2023 的攻击样本标记为 1
 LABEL = 1 
