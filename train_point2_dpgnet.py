@@ -11,7 +11,7 @@ import matplotlib.pyplot as plt
 
 # ================= 配置 =================
 # 数据文件
-FLASH_FILE = './flash_event_9dim_ready.csv'    # Label = 0
+FLASH_FILE = './flash_event_9dim_final.csv'    # Label = 0
 DDOS_FILE = './ciciot_ddos_9dim_final.csv'     # Label = 1 (含原始+削弱)
 MODEL_PATH = './dpg_net_model.pth'
 
