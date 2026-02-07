@@ -1,40 +1,55 @@
 import pandas as pd
 import numpy as np
+from sklearn.utils import shuffle
 
-# 输入：您现有的 DDoS 数据 (9维)
+# 输入：之前的 9 维 DDoS 数据 (包含了原始+降速)
 INPUT_FILE = './ciciot_ddos_9dim_final.csv'
-OUTPUT_FILE = './adversarial_ddos_attack.csv'
+OUTPUT_FILE = './ciciot_ddos_ultimate_train.csv'
 
-def generate_smart_attacker():
-    print("[*] 正在生成对抗性样本 (Adversarial Samples)...")
-    df = pd.read_csv(INPUT_FILE)
+def create_ultimate_dataset():
+    print("[*] 正在构建终极对抗训练集...")
     
-    # 只选择 DDoS 样本
-    df_ddos = df[df['Label'] == 1].copy()
+    # 1. 读取现有数据 (里面已经有 50% 原始 + 50% 降速)
+    df_existing = pd.read_csv(INPUT_FILE)
+    print(f"    - 现有样本数: {len(df_existing)}")
     
-    # === 模拟高级攻击者的"伪装"行为 ===
+    # 2. 生成"困难模式"样本 (Adversarial Samples)
+    # 我们复制一份现有的降速样本，专门用来修改它的包大小特征
+    # 逻辑：从现有数据中随机抽 50% 出来进行"变异"
+    df_hard = df_existing.sample(frac=0.5, random_state=999).copy()
     
-    # 1. 伪装载荷 (Payload Mutation)
-    # 攻击者学会了随机填充包大小，模仿 Flash Event 的 Size_Std (通常在 200~1000 之间)
-    # 我们强行把 DDoS 的 Size_Std 从 0 修改为 200~1000 的随机数
-    print("    - 注入攻击策略 A: 随机化包大小 (绕过分布检测)...")
-    df_ddos['Size_Std'] = np.random.uniform(200, 1000, size=len(df_ddos))
-    # 连带修改相关的衍生特征
-    df_ddos['SizeStd_MA'] = df_ddos['Size_Std'] # 简单模拟
-    df_ddos['SizeStd_Change'] = np.random.normal(0, 50, size=len(df_ddos)) # 假装有波动
+    print("    - 正在生成变异样本 (模拟 Size_Std 欺骗)...")
     
-    # 2. 伪装速率 (Rate Mutation) - 已经在之前的脚本里做过降速了，这里保留之前的降速成果
-    # 如果您想更狠一点，可以把 Entropy 也改高一点 (模拟多源 IP 欺骗)
-    # df_ddos['Entropy'] = np.random.uniform(5.0, 8.0, size=len(df_ddos)) 
+    # === 核心变异逻辑 ===
+    # 强行把 DDoS 的 Size_Std 改得跟 Flash Event 一样 (200~1000)
+    # 这样模型就不能只看 Size_Std 了，必须被迫去看 Rate_Vol (动力学特征)
     
-    # 注意：我们【不修改】动力学特征 (Rate_Vol, Rate_Accel)
-    # 因为这是僵尸网络的"生理缺陷"——脚本很难模拟出人类那种极其自然的随机点击节奏。
-    # 这正是 DPG-Net 获胜的关键！
+    # 生成随机欺骗值
+    random_std = np.random.uniform(200, 1000, size=len(df_hard))
     
-    df_ddos.to_csv(OUTPUT_FILE, index=False)
-    print(f"[*] 对抗样本生成完毕: {OUTPUT_FILE}")
-    print(f"    样本数: {len(df_ddos)}")
-    print("    特征描述: Size_Std 已被人为篡改为高波动，看起来像 Flash Event。")
+    df_hard['Size_Std'] = random_std
+    df_hard['SizeStd_MA'] = random_std # 均值也跟着变
+    df_hard['SizeStd_Change'] = np.random.normal(0, 50, size=len(df_hard)) # 假装有波动
+    
+    # === 关键点：动力学特征 (Rate_Vol, Accel) 保持不变！===
+    # 因为这是僵尸网络的"指纹"，攻击者很难改掉机器的死板节奏。
+    
+    # 3. 合并所有数据
+    # 最终数据集构成：
+    # - 原始简单样本
+    # - 原始降速样本
+    # - 新增的困难变异样本 (让模型见过世面)
+    df_final = pd.concat([df_existing, df_hard], ignore_index=True)
+    df_final = shuffle(df_final, random_state=42)
+    
+    # 保存
+    df_final.to_csv(OUTPUT_FILE, index=False)
+    
+    print("="*50)
+    print(f"[*] 终极训练集生成完毕: {OUTPUT_FILE}")
+    print(f"[*] 总样本数: {len(df_final)}")
+    print(f"[*] 包含: 原始暴力流 + 隐蔽降速流 + 对抗欺骗流 (混合训练)")
+    print("="*50)
 
 if __name__ == "__main__":
-    generate_smart_attacker()
+    create_ultimate_dataset()
