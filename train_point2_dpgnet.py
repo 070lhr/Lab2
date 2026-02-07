@@ -13,7 +13,7 @@ import os
 # ================= 配置区域 =================
 # 1. 数据文件路径
 # Flash 数据 (Label=0)
-FLASH_FILE = './flash_event_9dim_ready.csv'
+FLASH_FILE = './flash_event_9dim_final.csv'
 # 终极 DDoS 数据 (Label=1, 含原始+降速+对抗样本)
 DDOS_FILE = './ciciot_ddos_ultimate_train.csv'
 
