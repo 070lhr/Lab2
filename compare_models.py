@@ -14,7 +14,7 @@ TRAIN_FILE = './ciciot_ddos_ultimate_train.csv'
 ADV_TEST_FILE = './adversarial_ddos_attack.csv'
 # 3. 常规测试数据 (从训练集中切分，或使用之前的 Flash+DDoS 混合)
 # 为了方便，这里直接读取之前处理好的 Flash 和 DDoS 9维数据
-FLASH_FILE = './flash_event_9dim_ready.csv'
+FLASH_FILE = './flash_event_9dim_final.csv'
 DDOS_FILE = './ciciot_ddos_9dim_final.csv'
 
 # 特征列
