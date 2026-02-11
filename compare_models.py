@@ -10,7 +10,7 @@ import torch
 # ================= 配置 =================
 TRAIN_FILE = './ciciot_ddos_ultimate_train.csv'
 ADV_FILE = './adversarial_ddos_attack.csv'      # 全是拟态 DDoS
-FLASH_FILE = './flash_event_9dim_ready.csv'     # 全是 Flash
+FLASH_FILE = './flash_event_9dim_final.csv'     # 全是 Flash
 DDOS_FILE = './ciciot_ddos_9dim_final.csv'      # 普通 DDoS
 
 FEATURE_COLS = [
