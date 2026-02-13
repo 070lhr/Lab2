@@ -16,14 +16,13 @@ from sklearn.utils import shuffle
 INPUT_DIR = '/data/exp/hrliu/CIC2023/pcap/' 
 
 # 输出：最终合并的 CSV 文件
-OUTPUT_CSV = './ciciot_ddos_9dim_final.csv'
-
+OUTPUT_CSV = './ciciot_ddos_9dim_full.csv'
+ 
 # 标签：DDoS = 1
 LABEL = 1 
 
-# 降维打击参数：将高频攻击削弱到的目标区间
-TARGET_RATE_MIN = 2000
-TARGET_RATE_MAX = 5000
+# 窗口大小
+WINDOW_SIZE = 5
 # ===========================================
 
 def calculate_entropy(ip_list):
@@ -33,7 +32,7 @@ def calculate_entropy(ip_list):
     probs = counts / len(ip_list)
     return entropy(probs, base=2)
 
-def compute_rolling_features(df):
+def compute_9_features(df):
     """
     【核心特征工程】
     基于 4 个基础特征，扩展计算出 9 个时序特征
@@ -47,81 +46,37 @@ def compute_rolling_features(df):
     # f1: Rate (基础值)
     # f2: 速率加速度 (变化快慢)
     df['Rate_Accel'] = df['Rate'].diff().fillna(0)
-    # f3: 速率波动率 (5秒窗口标准差，反映流量是否"死板")
-    df['Rate_Vol'] = df['Rate'].rolling(window=5, min_periods=1).std().fillna(0)
+    
+    # f3: 速率变异系数 (Rate_CV) - 替代 Rate_Vol
+    # CV = Std / Mean (反映相对波动，消除量级影响)
+    roll_std = df['Rate'].rolling(window=WINDOW_SIZE, min_periods=1).std().fillna(0)
+    roll_mean = df['Rate'].rolling(window=WINDOW_SIZE, min_periods=1).mean().fillna(0)
+    # 加上 1e-6 防止除以 0
+    df['Rate_CV'] = roll_std / (roll_mean + 1e-6)
     
     # === 2. 熵维度 (Entropy Dimension) ===
     # f4: Entropy (基础值)
     # f5: 熵的变化率 (攻击开始/结束时的突变)
     df['Ent_Change'] = df['Entropy'].diff().fillna(0)
     # f6: 熵的移动平均 (5秒均值，消除抖动看长期趋势)
-    df['Ent_MA'] = df['Entropy'].rolling(window=5, min_periods=1).mean().fillna(df['Entropy'])
+    df['Ent_MA'] = df['Entropy'].rolling(window=WINDOW_SIZE, min_periods=1).mean().fillna(df['Entropy'])
     
     # === 3. 载荷维度 (Payload Dimension) ===
     # f7: Size_Std (基础值)
     # f8: 载荷标准差的变化
     df['SizeStd_Change'] = df['Size_Std'].diff().fillna(0)
     # f9: 载荷标准差的均值 (5秒均值)
-    df['SizeStd_MA'] = df['Size_Std'].rolling(window=5, min_periods=1).mean().fillna(df['Size_Std'])
+    df['SizeStd_MA'] = df['Size_Std'].rolling(window=WINDOW_SIZE, min_periods=1).mean().fillna(df['Size_Std'])
     
     # 清理因 diff 产生的 NaN (填充为 0)
     df = df.fillna(0)
     
     return df
 
-def apply_stealthy_mix_9dim(df_original):
-    """ 
-    【降维打击策略】
-    随机选择 50% 的数据，将其速率相关特征削弱，模拟 Low-Rate DDoS。
-    另外 50% 保持原始高强度。
-    """
-    if df_original is None or df_original.empty: 
-        return pd.DataFrame()
-    
-    current_mean_rate = df_original['Rate'].mean()
-    
-    # 如果原始速率本身就很低，就不削弱了，直接返回
-    if current_mean_rate < TARGET_RATE_MAX: 
-        return df_original
-    
-    # 1. 随机打乱并重置索引
-    df_shuffled = df_original.sample(frac=1, random_state=42).reset_index(drop=True)
-    
-    # 2. 找到切分点 (50%)
-    split_point = len(df_shuffled) // 2
-    
-    # 3. 切分数据
-    df_keep_high = df_shuffled.iloc[:split_point].copy() # 保留原始
-    df_to_modify = df_shuffled.iloc[split_point:].copy() # 准备削弱
-    
-    # 4. 计算削弱因子 (随机浮动)
-    center_factor = current_mean_rate / ((TARGET_RATE_MIN + TARGET_RATE_MAX) / 2)
-    # 生成随机因子数组，范围在中心因子周围 ±1.5
-    factors = np.random.uniform(low=max(1.1, center_factor - 1.5), 
-                                high=center_factor + 1.5, 
-                                size=len(df_to_modify))
-    
-    # 5. 执行削弱 (只削弱与"量"有关的特征)
-    # Rate 变小
-    df_to_modify['Rate'] = df_to_modify['Rate'] / factors
-    
-    # 衍生特征也要变：加速度变小
-    df_to_modify['Rate_Accel'] = df_to_modify['Rate_Accel'] / factors
-    # 波动率变小 (标准差随幅度下降)
-    df_to_modify['Rate_Vol'] = df_to_modify['Rate_Vol'] / factors
-    
-    # 【注意】熵 (Entropy) 和包大小 (Size_Std) 系列特征不需要除以 factor
-    # 因为攻击变慢了，不代表它的 IP 分布变了，也不代表包大小特征变了
-    
-    # 6. 合并回去
-    df_mixed = pd.concat([df_keep_high, df_to_modify], ignore_index=True)
-    
-    return df_mixed
-
 def process_single_pcap(pcap_path):
     """
     工作进程：处理单个 PCAP 的完整流程
-    1. 解析 PCAP -> 2. 按秒聚合 -> 3. 计算9特征 -> 4. 混合削弱
+    1. 解析 PCAP -> 2. 按秒聚合 -> 3. 计算9特征 (不进行任何削弱)
     """
     filename = os.path.basename(pcap_path)
     pid = os.getpid()
@@ -174,7 +129,6 @@ def process_single_pcap(pcap_path):
                                 'Size_Std': np.std(temp_sizes),    # f7 基础
                                 'Entropy': calculate_entropy(temp_ips), # f4 基础
                                 'Label': LABEL,
-                                # 其他特征稍后通过 compute_rolling_features 计算
                             })
                     # 重置下一秒
                     current_second = timestamp
@@ -205,17 +159,14 @@ def process_single_pcap(pcap_path):
     # 1. 转 DataFrame
     df = pd.DataFrame(features_list)
     
-    # 2. 计算 9 个高级时序特征
-    # (这一步会自动排序并计算 diff/rolling)
-    df = compute_rolling_features(df)
+    # 2. 计算 9 个高级时序特征 (含 Rate_CV)
+    df = compute_9_features(df)
     
-    # 3. 应用 50% 混合削弱策略 (降维打击)
-    df_mixed = apply_stealthy_mix_9dim(df)
+    # 3. 不再调用 apply_stealthy_mix，直接返回原始数据
     
-    print(f"[PID {pid}] 完成 {filename}: 共 {len(df_mixed)} 条样本")
+    print(f"[PID {pid}] 完成 {filename}: 共 {len(df)} 条样本")
     
-    # 返回列表 (multiprocessing 要求)
-    return [df_mixed]
+    return [df]
 
 def main():
     # 1. 扫描文件
@@ -228,7 +179,7 @@ def main():
     # 2. 自动检测 CPU 核数
     max_workers = os.cpu_count() or 4
     print(f"[*] 检测到 {max_workers} 个 CPU 核心，开始并行处理 {len(pcap_files)} 个文件...")
-    print(f"[*] 目标: 提取 9 维特征 + 50% 替换为隐蔽样本")
+    print(f"[*] 目标: 提取 9 维全量特征 (含 Rate_CV)")
     print("="*60)
 
     all_dfs = []
@@ -260,10 +211,9 @@ def main():
     # 5. 全局打乱 (Shuffle)
     df_final = shuffle(df_final, random_state=42)
     
-    # 6. 整理列顺序 (只保留训练需要的列)
-    # 定义 9 个特征列名
+    # 6. 整理列顺序
     feature_cols = [
-        'Rate', 'Rate_Accel', 'Rate_Vol', 
+        'Rate', 'Rate_Accel', 'Rate_CV',    # 注意这里变成了 Rate_CV
         'Entropy', 'Ent_Change', 'Ent_MA', 
         'Size_Std', 'SizeStd_Change', 'SizeStd_MA', 
         'Label'
