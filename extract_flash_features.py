@@ -22,7 +22,7 @@ WINDOW_SIZE = 5
 # 【新增】速率阈值过滤
 # 只有每秒请求数大于此值的样本才会被保留
 # 建议设为 500 或 1000，以去除低流量噪声，保留真正的 Flash Crowd 高峰
-RATE_THRESHOLD = 500 
+RATE_THRESHOLD = 250 
 # ===========================================
 
 def calculate_entropy(ids):
