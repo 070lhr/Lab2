@@ -5,7 +5,7 @@ import math
 import os
 
 # ================= 配置 =================
-# 指定新的文件名
+# 指定新的文件名 (保持不变)
 FLASH_FILE = './flash_event_9dim_full.csv'
 DDOS_FILE = './ciciot_ddos_9dim_full.csv'
 OUTPUT_IMG = 'all_9_features_distribution_full.png'
@@ -24,7 +24,7 @@ def plot_all_features():
     # 排除掉不需要画图的列 (Label, timestamp, 索引等)
     exclude_cols = ['Label', 'timestamp', 'Unnamed: 0']
     
-    # 自动获取特征列表 (这样无论您列名是 Rate_Vol 还是 Rate_CV 都能自动画出来)
+    # 自动获取特征列表
     features_to_check = [col for col in df_flash.columns if col not in exclude_cols]
     
     n_features = len(features_to_check)
@@ -45,26 +45,29 @@ def plot_all_features():
     for i, col in enumerate(features_to_check):
         plt.subplot(rows, cols, i+1)
         
-        # 绘制 Flash (蓝色)
+        # 绘制 Flash (蓝色) -> 改为 percent
         sns.histplot(df_flash[col], color='blue', label='Flash Event', 
-                     kde=True, stat="density", common_norm=False, 
+                     kde=True, stat="percent", common_norm=False, 
                      element="step", fill=True, alpha=0.3)
         
-        # 绘制 DDoS (红色)
+        # 绘制 DDoS (红色) -> 改为 percent
         sns.histplot(df_ddos[col], color='red', label='DDoS Attack', 
-                     kde=True, stat="density", common_norm=False, 
+                     kde=True, stat="percent", common_norm=False, 
                      element="step", fill=True, alpha=0.3)
         
         plt.title(f'Distribution: {col}', fontsize=14, fontweight='bold')
         plt.xlabel(col, fontsize=12)
-        plt.ylabel('Density', fontsize=12)
+        
+        # 修改 Y 轴标签为 Percentage (%)
+        plt.ylabel('Percentage (%)', fontsize=12)
+        
         plt.legend()
         plt.grid(True, linestyle='--', alpha=0.5)
 
     plt.tight_layout()
     plt.savefig(OUTPUT_IMG, dpi=300, bbox_inches='tight')
     print(f"\n[OK] 绘图完成！图片已保存为: {OUTPUT_IMG}")
-    print("     请查看这张图，重点观察 'Rate_CV' 是否呈现了红蓝分离的趋势。")
+    print("     现在 Y 轴代表‘样本占比(%)’，数值（如 20）代表该区间包含了 20% 的样本。")
 
 if __name__ == "__main__":
     plot_all_features()
