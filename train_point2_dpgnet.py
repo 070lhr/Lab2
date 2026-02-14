@@ -126,7 +126,7 @@ def load_and_preprocess():
 
     # 确保列顺序绝对一致
     feature_cols = [
-        'Rate', 'Rate_Accel', 'Rate_Vol',       # 动力学
+        'Rate', 'Rate_Accel', 'Rate_CV',       # 动力学
         'Entropy', 'Ent_Change', 'Ent_MA',      # 熵
         'Size_Std', 'SizeStd_Change', 'SizeStd_MA' # 载荷
     ]
