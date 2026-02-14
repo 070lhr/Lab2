@@ -13,9 +13,9 @@ import os
 # ================= 配置区域 =================
 # 1. 数据文件路径
 # Flash 数据 (Label=0)
-FLASH_FILE = './flash_event_9dim_final.csv'
-# 终极 DDoS 数据 (Label=1, 含原始+降速+对抗样本)
-DDOS_FILE = './ciciot_ddos_ultimate_train.csv'
+FLASH_FILE = './flash_event_9dim_full.csv'
+# DDoS 数据 
+DDOS_FILE = './ciciot_ddos_9dim_full.csv'
 
 # 2. 输出路径
 MODEL_SAVE_PATH = './dpg_net_model.pth'
