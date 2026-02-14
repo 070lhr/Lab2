@@ -6,7 +6,7 @@ import os
 
 # ================= 配置 =================
 # 指定新的文件名 (保持不变)
-FLASH_FILE = './flash_event_9dim_full.csv'
+FLASH_FILE = './flash_event_9dim_filtered_1200.csv'
 DDOS_FILE = './ciciot_ddos_9dim_full.csv'
 OUTPUT_IMG = 'all_9_features_distribution_full.png'
 # =======================================
