@@ -4,13 +4,13 @@ import os
 # ================= 配置区域 =================
 # 1. 输入文件 (您想过滤的那个文件)
 # 如果是那个 49万条的大文件，请把这里改成 'flash_event_9dim_ALL_PEAKS.csv'
-INPUT_FILE = './flash_event_9dim_full.csv'
+INPUT_FILE = './flash_event_9dim_全部.csv'
 
 # 2. 输出文件 (过滤后的新文件)
-OUTPUT_FILE = './flash_event_9dim_filtered_1200.csv'
+OUTPUT_FILE = './flash_event_9dim_full.csv'
 
 # 3. 过滤阈值 (只保留 Rate >= 1200 的行)
-THRESHOLD = 1200
+THRESHOLD = 1300
 # ===========================================
 
 def main():
