@@ -3,52 +3,37 @@ import torch.nn as nn
 import pandas as pd
 import numpy as np
 from sklearn.preprocessing import StandardScaler
-from sklearn.model_selection import train_test_split
 import joblib
 import os
 
 # ================= 配置 =================
-# 1. 模型与数据路径
 MODEL_PATH = './dpg_net_model.pth'
 SCALER_PATH = './dpg_scaler.pkl'
-FLASH_FILE = './flash_event_9dim_full.csv' # 用您过滤后的高质量 Flash
 DDOS_FILE = './ciciot_ddos_9dim_full.csv'
-
-# 2. 输出：生成的对抗样本保存路径
 ADV_OUTPUT_CSV = './adversarial_ddos_samples.csv'
-
-# 3. 攻击强度 (Epsilon)
-# 这个值越大，扰动越强，DDoS 越像 Flash，模型越容易瞎
-EPSILON = 0.2  
-
-# 4. 设备
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # =======================================
 
-# --- 模型定义 (必须与训练时一致) ---
+# --- 模型定义 ---
 class DPG_Net(nn.Module):
     def __init__(self):
         super(DPG_Net, self).__init__()
-        # 动力学流
         self.dynamics_branch = nn.Sequential(
             nn.Linear(3, 32), nn.BatchNorm1d(32), nn.ReLU(),
             nn.Linear(32, 16), nn.ReLU()
         )
-        # 分布流
         self.dist_branch = nn.Sequential(
             nn.Linear(6, 64), nn.BatchNorm1d(64), nn.ReLU(),
             nn.Linear(64, 32), nn.ReLU()
         )
-        # 融合层
         self.fusion_layer = nn.Sequential(
             nn.Linear(16 + 32, 64), nn.ReLU(),
-            nn.Dropout(0.3),
+            # 攻击时不需要 Dropout
             nn.Linear(64, 1)
         )
         self.sigmoid = nn.Sigmoid()
 
-    def forward(self, x, training_mode=False):
-        # 攻击时不需要 dropout，我们需要拿到准确的梯度
+    def forward(self, x):
         x_dyn = x[:, 0:3]
         x_dist = x[:, 3:9]
         out_dyn = self.dynamics_branch(x_dyn)
@@ -57,106 +42,113 @@ class DPG_Net(nn.Module):
         logits = self.fusion_layer(combined)
         return self.sigmoid(logits)
 
-# --- FGSM 核心函数 ---
-def fgsm_attack(model, data, target, epsilon):
-    """
-    生成对抗样本
-    data: 原始特征 (Tensor)
-    target: 真实标签 (Tensor)
-    epsilon: 扰动大小
-    """
-    # 1. 允许计算输入数据的梯度
+# --- 增强版 FGSM ---
+def fgsm_attack_batch(model, data, target, epsilon):
     data.requires_grad = True
-    
-    # 2. 前向传播
     output = model(data)
     
-    # 3. 计算 Loss (我们希望 Loss 变大，即让模型预测错)
-    # 这是一个 trick: 我们希望模型把 DDoS(1) 预测成 Flash(0)
-    # 所以我们计算它与 "Flash(0)" 的距离，然后去最小化这个距离？
-    # 不，标准 FGSM 是 maximize Loss(model(x), true_label)
+    # 使用 BCELoss
     loss = nn.BCELoss()(output, target)
-    
-    # 4. 梯度归零并反向传播
     model.zero_grad()
     loss.backward()
     
-    # 5. 获取输入的梯度符号
+    # 【诊断】检查梯度是否为 0
+    grad_mag = data.grad.data.abs().mean().item()
+    if grad_mag < 1e-6:
+        print(f"    [警告] 梯度消失 (Mag={grad_mag:.6f})! 模型太自信了，FGSM 推不动。")
+        # 这种情况下，对抗样本就是原始样本
+        return data.detach()
+    
     data_grad = data.grad.data.sign()
     
-    # 6. 生成对抗样本 (沿着梯度上升的方向走，让 Loss 变大)
-    # x_adv = x + epsilon * sign(grad)
+    # 生成对抗样本
+    # DDoS(1) -> 伪装成 Flash(0)，我们需要 minimize output probability
+    # 但 FGSM 是沿着梯度上升让 Loss 变大。
+    # Loss 变大 = 预测结果远离 Target(1) = 预测结果接近 0
+    # 所以公式没问题：x + eps * sign(grad)
     perturbed_data = data + epsilon * data_grad
-    
-    return perturbed_data
+    return perturbed_data.detach()
 
-def generate_adversarial():
+def main():
     print("[*] 正在加载环境...")
-    
-    # 1. 加载 Scaler
-    if not os.path.exists(SCALER_PATH):
-        print("[!] 找不到标准化器 (.pkl)，请先运行训练脚本。")
-        return
     scaler = joblib.load(SCALER_PATH)
     
-    # 2. 加载数据 (只加载 DDoS 数据用来攻击)
+    # 读取数据
     df_ddos = pd.read_csv(DDOS_FILE)
-    # 排除非特征列
+    # 稍微采样一点，不用全部跑，跑前 5000 个够了
+    df_ddos = df_ddos.head(5000)
+    
     feature_cols = [
         'Rate', 'Rate_Accel', 'Rate_CV', 
         'Entropy', 'Ent_Change', 'Ent_MA', 
         'Size_Std', 'SizeStd_Change', 'SizeStd_MA'
     ]
     X_ddos = df_ddos[feature_cols].values
-    y_ddos = np.ones(len(df_ddos)) # Label = 1
+    y_ddos = np.ones(len(df_ddos)) 
     
-    # 标准化 (非常重要！攻击必须在标准化空间进行)
     X_ddos_norm = scaler.transform(X_ddos)
-    
-    # 转 Tensor
     X_tensor = torch.tensor(X_ddos_norm, dtype=torch.float32).to(DEVICE)
     y_tensor = torch.tensor(y_ddos, dtype=torch.float32).unsqueeze(1).to(DEVICE)
     
-    # 3. 加载模型
     model = DPG_Net().to(DEVICE)
     model.load_state_dict(torch.load(MODEL_PATH))
-    model.eval() # 评估模式
+    model.eval()
     
-    # 4. 测试攻击前的准确率
-    print("\n[*] 攻击前基准测试 (Clean Accuracy)...")
+    # 基准测试
     with torch.no_grad():
         clean_out = model(X_tensor)
-        clean_pred = (clean_out > 0.5).float()
-        clean_acc = (clean_pred.eq(y_tensor).sum() / y_tensor.shape[0]).item()
-        print(f"    DDoS 识别率: {clean_acc*100:.2f}% (应该是 100%)")
+        clean_acc = ((clean_out > 0.5).float().eq(y_tensor).sum() / y_tensor.shape[0]).item()
+        print(f"[*] 基准准确率: {clean_acc*100:.2f}%")
 
-    # 5. 执行 FGSM 攻击
-    print(f"\n[*] 开始生成对抗样本 (FGSM Attack, Epsilon={EPSILON})...")
-    # 这里的逻辑是：让模型无法识别这些是 DDoS
-    X_adv_tensor = fgsm_attack(model, X_tensor, y_tensor, EPSILON)
+    # === 暴力搜索最佳 Epsilon ===
+    # 既然 0.2 不行，我们就试大一点
+    epsilons = [0.2, 0.5, 1.0, 1.5, 2.0, 3.0, 5.0, 10.0]
     
-    # 6. 测试攻击后的准确率
-    print("[*] 攻击后鲁棒性测试 (Adversarial Accuracy)...")
-    with torch.no_grad():
-        adv_out = model(X_adv_tensor)
-        adv_pred = (adv_out > 0.5).float() # 依然预测它是 1
-        adv_acc = (adv_pred.eq(y_tensor).sum() / y_tensor.shape[0]).item()
-        print(f"    DDoS 识别率: {adv_acc*100:.2f}% (越低说明攻击越成功)")
-        print(f"    --> 欺骗成功率: {(1-adv_acc)*100:.2f}%")
+    best_adv_data = None
+    lowest_acc = 1.0
+    
+    print(f"\n[*] 开始暴力搜索最佳攻击强度...")
+    print(f"{'Epsilon':<10} | {'Model Acc':<15} | {'Success Rate':<15}")
+    print("-" * 45)
+    
+    for eps in epsilons:
+        # 重新加载 graph
+        X_temp = X_tensor.clone().detach()
+        y_temp = y_tensor.clone().detach()
+        
+        # 攻击
+        X_adv = fgsm_attack_batch(model, X_temp, y_temp, eps)
+        
+        # 测试效果
+        with torch.no_grad():
+            out = model(X_adv)
+            acc = ((out > 0.5).float().eq(y_temp).sum() / y_temp.shape[0]).item()
+            success_rate = 1.0 - acc
+            
+            print(f"{eps:<10} | {acc*100:.2f}%          | {success_rate*100:.2f}%")
+            
+            # 保存效果最好（准确率最低）的那一组
+            if acc < lowest_acc:
+                lowest_acc = acc
+                best_adv_data = X_adv
+                
+            # 如果成功率已经很高了（比如 > 80%），就没必要再加大了
+            if success_rate > 0.8:
+                print("    -> 攻击成功率达标，停止搜索。")
+                break
 
-    # 7. 逆标准化并保存对抗样本
-    # 我们需要把扰动后的数据还原成真实数值，看看它变成了什么样
-    X_adv_np = X_adv_tensor.cpu().detach().numpy()
-    X_adv_original_scale = scaler.inverse_transform(X_adv_np)
-    
-    # 创建 DataFrame
-    df_adv = pd.DataFrame(X_adv_original_scale, columns=feature_cols)
-    df_adv['Label'] = 1 # 它们本质上还是 DDoS
-    
-    # 保存
-    df_adv.to_csv(ADV_OUTPUT_CSV, index=False)
-    print(f"\n[*] 对抗样本已保存至: {ADV_OUTPUT_CSV}")
-    print("    您可以打开查看，主要观察 'Size_Std' 和 'Entropy' 是否变得像 Flash 了。")
+    # === 保存最佳对抗样本 ===
+    if best_adv_data is not None:
+        X_adv_np = best_adv_data.cpu().numpy()
+        X_adv_original = scaler.inverse_transform(X_adv_np)
+        
+        df_adv = pd.DataFrame(X_adv_original, columns=feature_cols)
+        df_adv['Label'] = 1 # 依然标记为 DDoS，用于后续对抗训练
+        df_adv.to_csv(ADV_OUTPUT_CSV, index=False)
+        print(f"\n[*] 已保存最强对抗样本 (Acc={lowest_acc*100:.2f}%) 至: {ADV_OUTPUT_CSV}")
+        print("    -> 现在您可以把这些样本加入训练集，进行对抗训练了！")
+    else:
+        print("\n[!] 警告：所有攻击都失败了。您的模型可能是无敌的，或者梯度完全消失。")
 
 if __name__ == "__main__":
-    generate_adversarial()
+    main()
