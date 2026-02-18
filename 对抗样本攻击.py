@@ -11,11 +11,15 @@ MODEL_PATH = './dpg_net_model.pth'
 SCALER_PATH = './dpg_scaler.pkl'
 DDOS_FILE = './ciciot_ddos_9dim_full.csv'
 ADV_OUTPUT_CSV = './adversarial_ddos_samples.csv'
-EPSILONS_TO_SEARCH = [0.5, 1.0, 2.0, 3.0, 5.0, 8.0, 10.0]
+
+# PGD 攻击配置
+EPSILON = 5.0        # 最大允许扰动 (Z-score 空间，5.0 已经很大了)
+ALPHA = 0.2          # 每一步走的距离 (步长)
+STEPS = 40           # 迭代次数 (走的步数)
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # =======================================
 
-# --- 1. 模型定义 (必须完全一致) ---
+# --- 1. 模型定义 (保持完全一致) ---
 class DPG_Net(nn.Module):
     def __init__(self):
         super(DPG_Net, self).__init__()
@@ -34,8 +38,6 @@ class DPG_Net(nn.Module):
         )
         self.sigmoid = nn.Sigmoid()
 
-    # === 修改点：增加一个只返回 logits 的方法 ===
-    # 这样我们可以绕过 Sigmoid 直接攻击
     def forward_logits(self, x):
         x_dyn = x[:, 0:3]
         x_dist = x[:, 3:9]
@@ -43,53 +45,67 @@ class DPG_Net(nn.Module):
         out_dist = self.dist_branch(x_dist)
         combined = torch.cat((out_dyn, out_dist), dim=1)
         logits = self.fusion_layer(combined)
-        return logits # 注意：这里没有 Sigmoid
+        return logits
 
     def forward(self, x):
         return self.sigmoid(self.forward_logits(x))
 
-# --- 2. 基于 Logits 的 FGSM 攻击 ---
-def fgsm_attack_logits(model, data, target, epsilon):
+# --- 2. PGD 攻击函数 (Iterative) ---
+def pgd_attack(model, data, target, epsilon, alpha, steps):
     """
-    使用 BCEWithLogitsLoss 进行攻击，避免梯度消失
+    PGD: 迭代式攻击，威力远超 FGSM
     """
-    data_copy = data.clone().detach().requires_grad_(True)
+    # 1. 随机初始化 (Random Start): 在原始点附近随机跳一下，避免陷入局部最优
+    # data_adv = data.clone().detach() + torch.empty_like(data).uniform_(-epsilon, epsilon)
+    # data_adv = torch.clamp(data_adv, min=data-epsilon, max=data+epsilon).detach()
     
-    # 1. 获取 Logits (不经过 Sigmoid)
-    logits = model.forward_logits(data_copy)
+    # 这里为了演示清晰，我们直接从原点开始 (Standard PGD)
+    data_adv = data.clone().detach()
     
-    # 2. 计算 Loss (BCEWithLogitsLoss 更稳定)
-    # 我们希望 Loss 变大 (让模型预测错)
     criterion = nn.BCEWithLogitsLoss()
-    loss = criterion(logits, target)
     
-    # 3. 反向传播
-    model.zero_grad()
-    loss.backward()
-    
-    # 4. 获取梯度
-    data_grad = data_copy.grad.data
-    
-    # 【诊断】打印梯度的平均强度，看看是不是 0
-    # grad_mean = data_grad.abs().mean().item()
-    # if grad_mean == 0:
-    #     print(" [!] 梯度依然是 0，这很不正常！")
-    
-    # 5. 生成对抗样本
-    # x_adv = x + epsilon * sign(grad)
-    perturbed_data = data + epsilon * data_grad.sign()
-    
-    return perturbed_data.detach()
+    for i in range(steps):
+        data_adv.requires_grad = True
+        
+        # 前向传播 (Logits)
+        logits = model.forward_logits(data_adv)
+        loss = criterion(logits, target)
+        
+        # 反向传播
+        model.zero_grad()
+        loss.backward()
+        
+        # 获取梯度方向
+        grad = data_adv.grad.detach().sign()
+        
+        # 更新数据: data + alpha * sign(grad)
+        data_adv = data_adv + alpha * grad
+        
+        # 投影 (Projection): 确保扰动不超过 epsilon
+        # 计算总扰动
+        delta = data_adv - data
+        # 截断扰动到 [-epsilon, +epsilon] 之间
+        delta = torch.clamp(delta, -epsilon, epsilon)
+        
+        # 应用截断后的扰动
+        data_adv = (data + delta).detach()
+        
+        # (可选) 打印中间过程 loss，看看是不是在上升
+        # if i % 10 == 0:
+        #     print(f"    Step {i}/{steps}, Loss: {loss.item():.4f}")
+            
+    return data_adv
 
 # --- 3. 主程序 ---
 def main():
-    print(f"[*] 初始化 (Device: {DEVICE})...")
+    print(f"[*] 初始化 PGD 攻击 (Steps={STEPS}, Epsilon={EPSILON}, Alpha={ALPHA})...")
     
     if not os.path.exists(MODEL_PATH): return
     scaler = joblib.load(SCALER_PATH)
     
-    # 读取数据 (取前 5000 条)
-    df_ddos = pd.read_csv(DDOS_FILE).head(5000)
+    # 读取数据 (这次可以多读点，或者全部读)
+    # 为了测试速度，先读 2000 条看看效果
+    df_ddos = pd.read_csv(DDOS_FILE).head(2000)
     
     feature_cols = [
         'Rate', 'Rate_Accel', 'Rate_CV', 
@@ -108,49 +124,40 @@ def main():
     model.load_state_dict(torch.load(MODEL_PATH, map_location=DEVICE))
     model.eval()
     
-    # === 暴力搜索 ===
-    print(f"\n[*] --- 使用 Logits 进行强力攻击 ---")
-    print(f"{'Epsilon':<10} | {'Model Acc':<15} | {'Diff (L2)':<15}")
-    print("-" * 50)
-    
-    lowest_acc = 1.0
-    best_adv = None
-    best_eps = 0
-    
-    for eps in EPSILONS_TO_SEARCH:
-        # 攻击
-        X_adv = fgsm_attack_logits(model, X_tensor, y_tensor, eps)
-        
-        # 检查数据到底变了没？(计算 L2 距离)
-        diff = (X_adv - X_tensor).norm().item()
-        
-        # 测试效果 (用完整的 forward 测准确率)
-        with torch.no_grad():
-            probs = model(X_adv)
-            acc = ((probs > 0.5).float().eq(y_tensor).sum() / y_tensor.shape[0]).item()
-            
-            print(f"{eps:<10} | {acc*100:.2f}%          | {diff:.4f}")
-            
-            if acc < lowest_acc:
-                lowest_acc = acc
-                best_adv = X_adv
-                best_eps = eps
+    # 1. 基准测试
+    with torch.no_grad():
+        clean_out = model(X_tensor)
+        clean_acc = ((clean_out > 0.5).float().eq(y_tensor).sum() / y_tensor.shape[0]).item()
+        print(f"[*] 原始准确率: {clean_acc*100:.2f}%")
 
-    # 保存
-    if best_adv is not None:
-        print("\n" + "="*50)
-        print(f"[*] 最强攻击强度: Epsilon={best_eps}")
-        print(f"[*] 此时模型识别率: {lowest_acc*100:.2f}%")
+    # 2. 执行 PGD 攻击
+    print(f"\n[*] 开始执行 PGD 迭代攻击...")
+    X_adv = pgd_attack(model, X_tensor, y_tensor, epsilon=EPSILON, alpha=ALPHA, steps=STEPS)
+    
+    # 3. 评估攻击效果
+    with torch.no_grad():
+        adv_out = model(X_adv)
+        adv_acc = ((adv_out > 0.5).float().eq(y_tensor).sum() / y_tensor.shape[0]).item()
         
-        X_adv_np = best_adv.cpu().numpy()
-        X_ori = scaler.inverse_transform(X_adv_np)
-        df_adv = pd.DataFrame(X_ori, columns=feature_cols)
-        df_adv['Label'] = 1 
+        print(f"\n" + "="*40)
+        print(f"[*] PGD 攻击后准确率: {adv_acc*100:.2f}%")
+        print(f"[*] 攻击成功率: {(1-adv_acc)*100:.2f}%")
         
-        df_adv.to_csv(ADV_OUTPUT_CSV, index=False)
-        print(f"[*] 对抗样本已保存至: {ADV_OUTPUT_CSV}")
-    else:
-        print("[!] 居然还是推不动？可能是 Epsilon 依然太小，或者模型出现了数值溢出。")
+        # 看看是不是真的只有那 1.4% 的人在变
+        flipped_cnt = ((adv_out > 0.5).float().eq(y_tensor) == False).sum().item()
+        print(f"[*] 成功欺骗样本数: {flipped_cnt} / {len(df_ddos)}")
+        print("="*40)
+
+    # 4. 保存对抗样本 (只保存成功的，或者全部保存？通常对抗训练需要全部保存)
+    # 我们全部保存，即使没成功的，也是“最难识别”的 DDoS
+    X_adv_np = X_adv.cpu().numpy()
+    X_ori = scaler.inverse_transform(X_adv_np)
+    
+    df_adv = pd.DataFrame(X_ori, columns=feature_cols)
+    df_adv['Label'] = 1 
+    
+    df_adv.to_csv(ADV_OUTPUT_CSV, index=False)
+    print(f"[*] 对抗样本已保存至: {ADV_OUTPUT_CSV}")
 
 if __name__ == "__main__":
     main()
