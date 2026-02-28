@@ -46,20 +46,20 @@ def plot_all_features():
         plt.subplot(rows, cols, i+1)
         
         # 绘制 Flash (蓝色) -> 改为 percent
-        sns.histplot(df_flash[col], color='blue', label='Flash Event', 
+        sns.histplot(df_flash[col], color='blue', label='FE', 
                      kde=True, stat="percent", common_norm=False, 
                      element="step", fill=True, alpha=0.3)
         
         # 绘制 DDoS (红色) -> 改为 percent
-        sns.histplot(df_ddos[col], color='red', label='DDoS Attack', 
+        sns.histplot(df_ddos[col], color='red', label='DDoS', 
                      kde=True, stat="percent", common_norm=False, 
                      element="step", fill=True, alpha=0.3)
         
-        plt.title(f'Distribution: {col}', fontsize=14, fontweight='bold')
+        plt.title(f'{col}', fontsize=14, fontweight='bold')
         plt.xlabel(col, fontsize=12)
         
         # 修改 Y 轴标签为 Percentage (%)
-        plt.ylabel('Percentage (%)', fontsize=12)
+        plt.ylabel('百分比 (%)', fontsize=12)
         
         plt.legend()
         plt.grid(True, linestyle='--', alpha=0.5)
