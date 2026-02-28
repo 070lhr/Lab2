@@ -3,15 +3,16 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import math
 import os
+from matplotlib.font_manager import FontProperties
 
 # ================= 配置 =================
-plt.rcParams['font.sans-serif'] = ['Microsoft YaHei', 'SimHei']
-plt.rcParams['axes.unicode_minus'] = False
-
 # 指定新的文件名 (保持不变)
 FLASH_FILE = './flash_event_9dim_full.csv'
 DDOS_FILE = './ciciot_ddos_9dim_full.csv'
 OUTPUT_IMG = 'all_9_features_distribution_full.png'
+
+# 指定微软雅黑字体文件路径及字号（确保 MSYH.TTC 与本脚本在同级目录）
+my_font = FontProperties(fname='./MSYH.TTC', size=12)
 # =======================================
 
 def plot_all_features():
@@ -61,8 +62,8 @@ def plot_all_features():
         plt.title(f'{col}', fontsize=14, fontweight='bold')
         plt.xlabel(col, fontsize=12)
         
-        # 修改 Y 轴标签为 Percentage (%)
-        plt.ylabel('样本占比(%)', fontsize=12)
+        # 修改 Y 轴标签为 Percentage (%)，并应用指定的本地中文字体
+        plt.ylabel('样本占比(%)', fontproperties=my_font)
         
         plt.legend()
         plt.grid(True, linestyle='--', alpha=0.5)
@@ -70,7 +71,7 @@ def plot_all_features():
     plt.tight_layout()
     plt.savefig(OUTPUT_IMG, dpi=300, bbox_inches='tight')
     print(f"\n[OK] 绘图完成！图片已保存为: {OUTPUT_IMG}")
-    print("     现在 Y 轴代表‘样本占比(%)’，数值（如 20）代表该区间包含了 20% 的样本。")
+    print("    现在 Y 轴代表‘样本占比(%)’，数值（如 20）代表该区间包含了 20% 的样本。")
 
 if __name__ == "__main__":
     plot_all_features()
