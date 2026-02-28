@@ -5,6 +5,9 @@ import math
 import os
 
 # ================= 配置 =================
+
+plt.rcParams['font.sans-serif'] = ['SimHei', 'Arial Unicode MS'] 
+plt.rcParams['axes.unicode_minus'] = False  # 确保坐标轴上的负号正常显示
 # 指定新的文件名 (保持不变)
 FLASH_FILE = './flash_event_9dim_full.csv'
 DDOS_FILE = './ciciot_ddos_9dim_full.csv'
@@ -59,7 +62,7 @@ def plot_all_features():
         plt.xlabel(col, fontsize=12)
         
         # 修改 Y 轴标签为 Percentage (%)
-        plt.ylabel('百分比 (%)', fontsize=12)
+        plt.ylabel('样本占比(%)', fontsize=12)
         
         plt.legend()
         plt.grid(True, linestyle='--', alpha=0.5)
