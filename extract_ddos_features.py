@@ -57,9 +57,9 @@ def compute_9_features(df):
     # === 2. 熵维度 (Entropy Dimension) ===
     # f4: Entropy (基础值)
     # f5: 熵的变化率 (攻击开始/结束时的突变)
-    df['Ent_Change'] = df['Entropy'].diff().fillna(0)
+    df['SIPEnt_Change'] = df['SIP_Ent'].diff().fillna(0)
     # f6: 熵的移动平均 (5秒均值，消除抖动看长期趋势)
-    df['Ent_MA'] = df['Entropy'].rolling(window=WINDOW_SIZE, min_periods=1).mean().fillna(df['Entropy'])
+    df['SIPEnt_MA'] = df['SIP_Ent'].rolling(window=WINDOW_SIZE, min_periods=1).mean().fillna(df['SIP_Ent'])
     
     # === 3. 载荷维度 (Payload Dimension) ===
     # f7: Size_Std (基础值)
@@ -127,7 +127,7 @@ def process_single_pcap(pcap_path):
                                 'timestamp': current_second,
                                 'Rate': len(temp_sizes),           # f1 基础
                                 'Size_Std': np.std(temp_sizes),    # f7 基础
-                                'Entropy': calculate_entropy(temp_ips), # f4 基础
+                                'SIP_Ent': calculate_entropy(temp_ips), # f4 基础
                                 'Label': LABEL,
                             })
                     # 重置下一秒
@@ -144,7 +144,7 @@ def process_single_pcap(pcap_path):
                     'timestamp': current_second,
                     'Rate': len(temp_sizes),
                     'Size_Std': np.std(temp_sizes),
-                    'Entropy': calculate_entropy(temp_ips),
+                    'SIP_Ent': calculate_entropy(temp_ips),
                     'Label': LABEL
                 })
 
@@ -213,9 +213,9 @@ def main():
     
     # 6. 整理列顺序
     feature_cols = [
-        'Rate', 'Rate_Accel', 'Rate_CV',    # 注意这里变成了 Rate_CV
-        'Entropy', 'Ent_Change', 'Ent_MA', 
         'Size_Std', 'SizeStd_Change', 'SizeStd_MA', 
+        'SIP_Ent',  'SIPEnt_MA', 'SIPEnt_Change',
+        'Rate', 'Rate_Accel', 'Rate_CV',    # 注意这里变成了 Rate_CV
         'Label'
     ]
     
