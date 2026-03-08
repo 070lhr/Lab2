@@ -190,9 +190,9 @@ def main():
     
     # 整理列顺序
     cols = [
-        'Rate', 'Rate_Accel', 'Rate_CV', 
-        'SIP_Ent', 'SIPEnt_Change', 'SIPEnt_MA', 
         'Size_Std', 'SizeStd_Change', 'SizeStd_MA', 
+        'SIP_Ent',  'SIPEnt_MA', 'SIPEnt_Change',
+        'Rate', 'Rate_Accel', 'Rate_CV',    # 注意这里变成了 Rate_CV
         'Label'
     ]
     # 确保列存在
