@@ -87,7 +87,7 @@ def process_single_csv(file_path):
                 'timestamp': ts,
                 'Rate': rate,
                 'Size_Std': size_std,
-                'Entropy': ip_ent,
+                'SIP_Ent': ip_ent,
                 'Label': LABEL
             })
             
@@ -111,8 +111,8 @@ def process_single_csv(file_path):
         df_res['Rate_CV'] = r_std / (r_mean + 1e-6)
         
         # Entropy Features (熵变化)
-        df_res['Ent_Change'] = df_res['Entropy'].diff().fillna(0)
-        df_res['Ent_MA'] = df_res['Entropy'].rolling(window=WINDOW_SIZE, min_periods=1).mean().fillna(df_res['Entropy'])
+        df_res['SIPEnt_Change'] = df_res['SIP_Ent'].diff().fillna(0)
+        df_res['SIPEnt_MA'] = df_res['SIP_Ent'].rolling(window=WINDOW_SIZE, min_periods=1).mean().fillna(df_res['SIP_Ent'])
         
         # Size Features (载荷变化)
         df_res['SizeStd_Change'] = df_res['Size_Std'].diff().fillna(0)
@@ -191,7 +191,7 @@ def main():
     # 整理列顺序
     cols = [
         'Rate', 'Rate_Accel', 'Rate_CV', 
-        'Entropy', 'Ent_Change', 'Ent_MA', 
+        'SIP_Ent', 'SIPEnt_Change', 'SIPEnt_MA', 
         'Size_Std', 'SizeStd_Change', 'SizeStd_MA', 
         'Label'
     ]
