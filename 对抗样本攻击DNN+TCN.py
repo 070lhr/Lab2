@@ -18,9 +18,8 @@ BATCH_SIZE = 256
 EPOCHS = 30
 LEARNING_RATE = 0.001
 
-# PGD 攻击参数 (白盒攻击极其精准，0.8的扰动足以让模型崩溃)
-EPSILON = 0.8      
-ALPHA = 0.1        
+# 对齐 4.5.3 节组图的阶梯测试配置
+EPSILONS = [0.0, 0.2, 0.4, 0.6, 0.8]      
 NUM_ITER = 40      
 # ===========================================
 
@@ -71,7 +70,6 @@ class TCN_Model(nn.Module):
 # ---------------------------------------------------------
 def pgd_attack_whitebox(model, X, y, epsilon, alpha, num_iter):
     """直接对目标深度学习模型发动白盒梯度攻击"""
-    model.eval() # 冻结 BatchNorm 和 Dropout，确保梯度计算准确
     criterion = nn.CrossEntropyLoss()
     X_adv = X.clone().detach()
     
@@ -96,9 +94,9 @@ def pgd_attack_whitebox(model, X, y, epsilon, alpha, num_iter):
 # 3. 核心攻防流程
 # ---------------------------------------------------------
 def train_and_evaluate(model, model_name, train_loader, X_test, y_test, device):
-    print(f"\n{'='*60}")
-    print(f"[*] 开始对 {model_name} 进行训练与白盒攻防测试")
-    print(f"{'='*60}")
+    print(f"\n{'='*70}")
+    print(f"[*] 开始对 {model_name} 进行训练与阶梯白盒攻防测试")
+    print(f"{'='*70}")
     
     model.to(device)
     criterion = nn.CrossEntropyLoss()
@@ -115,19 +113,8 @@ def train_and_evaluate(model, model_name, train_loader, X_test, y_test, device):
             loss.backward()
             optimizer.step()
             
-    # --- 阶段二：洁净测试集评估 ---
-    model.eval()
-    X_test_tensor = torch.FloatTensor(X_test).to(device)
-    with torch.no_grad():
-        outputs_clean = model(X_test_tensor)
-        _, preds_clean = torch.max(outputs_clean, 1)
-    
-    preds_clean_np = preds_clean.cpu().numpy()
-    acc_clean = accuracy_score(y_test, preds_clean_np)
-    print(f"[+] 攻击前 {model_name} 洁净测试集整体准确率 = {acc_clean*100:.2f}%")
-
-    # --- 阶段三：发动 PGD 白盒攻击 ---
-    print(f"[*] 正在对测试集中的 DDoS 流量发动白盒 PGD 拟态对抗攻击...")
+    # --- 阶段二：准备阶梯测试环境 ---
+    model.eval() # 必须开启 eval 模式，冻结 Dropout 和 BatchNorm
     
     # 提取测试集中的 DDoS (1) 和 正常流量 (0)
     ddos_indices = np.where(y_test == 1)[0]
@@ -140,36 +127,43 @@ def train_and_evaluate(model, model_name, train_loader, X_test, y_test, device):
     
     X_ddos_tensor = torch.FloatTensor(X_ddos_clean).to(device)
     y_ddos_tensor = torch.LongTensor(y_ddos_true).to(device)
-    
-    # 针对当前模型生成对抗样本
-    X_adv_tensor = pgd_attack_whitebox(model, X_ddos_tensor, y_ddos_tensor, EPSILON, ALPHA, NUM_ITER)
-    X_adv_np = X_adv_tensor.cpu().numpy()
-    
-    # 重组受污染的全局测试集
-    X_test_attacked = np.vstack((X_adv_np, X_fe_clean))
-    y_test_attacked = np.hstack((y_ddos_true, y_fe_true)) 
-    
-    # --- 阶段四：对抗评估 ---
-    X_test_attacked_tensor = torch.FloatTensor(X_test_attacked).to(device)
-    with torch.no_grad():
-        outputs_adv = model(X_test_attacked_tensor)
-        _, preds_adv = torch.max(outputs_adv, 1)
+    X_fe_tensor = torch.FloatTensor(X_fe_clean).to(device)
+
+    print(f"{'Epsilon':<8} | {'Accuracy (%)':<13} | {'Precision (%)':<13} | {'Recall (%)':<13} | {'F1-Score (%)':<13}")
+    print("-" * 70)
+
+    # --- 阶段三：阶梯式 PGD 攻击与评估 ---
+    for eps in EPSILONS:
+        if eps == 0.0:
+            X_adv_tensor = X_ddos_tensor # 0扰动即为洁净流量
+        else:
+            # 步长自适应：保证 40 步内细腻收敛
+            alpha = eps / 5.0 
+            X_adv_tensor = pgd_attack_whitebox(model, X_ddos_tensor, y_ddos_tensor, eps, alpha, NUM_ITER)
+            
+        X_adv_np = X_adv_tensor.cpu().numpy()
         
-    preds_adv_np = preds_adv.cpu().numpy()
+        # 将被污染的 DDoS 样本与干净的 FE 样本重新拼接
+        X_test_attacked = np.vstack((X_adv_np, X_fe_clean))
+        y_test_attacked = np.hstack((y_ddos_true, y_fe_true)) 
+        
+        X_test_attacked_tensor = torch.FloatTensor(X_test_attacked).to(device)
+        
+        with torch.no_grad():
+            outputs_adv = model(X_test_attacked_tensor)
+            _, preds_adv = torch.max(outputs_adv, 1)
+            
+        preds_adv_np = preds_adv.cpu().numpy()
+        
+        # 计算针对恶意流量的灾难性后果
+        acc = accuracy_score(y_test_attacked, preds_adv_np)
+        prec = precision_score(y_test_attacked, preds_adv_np, zero_division=0)
+        rec = recall_score(y_test_attacked, preds_adv_np, zero_division=0)
+        f1 = f1_score(y_test_attacked, preds_adv_np, zero_division=0)
+        
+        print(f"{eps:<8.1f} | {acc*100:<13.2f} | {prec*100:<13.2f} | {rec*100:<13.2f} | {f1*100:<13.2f}")
     
-    # 计算专门针对恶意流量的灾难性后果
-    acc_adv = accuracy_score(y_test_attacked, preds_adv_np)
-    prec_adv = precision_score(y_test_attacked, preds_adv_np, zero_division=0)
-    rec_adv = recall_score(y_test_attacked, preds_adv_np, zero_division=0)
-    f1_adv = f1_score(y_test_attacked, preds_adv_np, zero_division=0)
-    
-    print(f"\n 💥 {model_name} 遭遇白盒 PGD 攻击崩溃结果 💥")
-    print(f"攻击扰动幅度 (Epsilon)  = {EPSILON}")
-    print(f"攻击后全局 Accuracy (%)  = {acc_adv * 100:.2f}")
-    print(f"攻击后恶意 Precision (%) = {prec_adv * 100:.2f}")
-    print(f"攻击后恶意 Recall (%)    = {rec_adv * 100:.2f}")
-    print(f"攻击后恶意 F1-Score (%)  = {f1_adv * 100:.2f}")
-    print("-" * 60)
+    print("=" * 70)
 
 def main():
     print("[*] 正在加载并重组 9 维双路特征数据...")
@@ -183,7 +177,7 @@ def main():
     df_flash['Label'] = 0
     df_ddos['Label'] = 1
 
-    # 1:1 完美平衡采样，彻底消除准确率幻觉
+    # 1:1 完美平衡采样
     min_samples = min(len(df_flash), len(df_ddos))
     df_fe_sampled = df_flash.sample(n=min_samples, random_state=42)
     df_ddos_sampled = df_ddos.sample(n=min_samples, random_state=42)
@@ -195,7 +189,7 @@ def main():
     X = df[feature_cols].values
     y = df['Label'].values
 
-    # 深度学习必须进行的标准化映射
+    # 标准化映射
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X)
 
