@@ -11,8 +11,8 @@ from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_sc
 
 # ================= 配置区域 =================
 INPUT_CSV = './tinubu_3dim_full_mixed.csv' 
-EPSILON = 0.8      
-ALPHA = 0.1        
+# 对齐 4.5.3 节组图的阶梯测试配置
+EPSILONS = [0.0, 0.2, 0.4, 0.6, 0.8]      
 NUM_ITER = 40      
 # ===========================================
 
@@ -110,7 +110,7 @@ def main():
         optimizer.step()
     print("[+] 替代模型训练完毕！")
 
-    print("\n[*] 正在提取测试集中的 DDoS 流量并发动 PGD 拟态对抗攻击...")
+    print("\n[*] 正在提取测试集中的 DDoS 流量并准备阶梯式 PGD 拟态对抗攻击...")
     
     ddos_indices = np.where(y_test == 1)[0]
     X_ddos_clean = X_test[ddos_indices]
@@ -124,30 +124,39 @@ def main():
     y_ddos_tensor = torch.LongTensor(y_ddos_true).to(device)
     
     surrogate.eval()
-    X_adv_tensor = pgd_attack(surrogate, X_ddos_tensor, y_ddos_tensor, EPSILON, ALPHA, NUM_ITER)
-    X_adv_np = X_adv_tensor.cpu().numpy()
-    
-    print("[*] 正在将生成的对抗样本与正常的 FE 流量重新拼合...")
-    X_test_attacked = np.vstack((X_adv_np, X_fe_clean))
-    y_test_attacked = np.hstack((y_ddos_true, y_fe_true)) 
-    
-    print("[*] 正在让 DT 模型对受污染的全局测试集进行预测...")
-    y_pred_adv = dt_model.predict(X_test_attacked)
-    
-    acc_adv = accuracy_score(y_test_attacked, y_pred_adv)
-    prec_adv = precision_score(y_test_attacked, y_pred_adv, zero_division=0)
-    rec_adv = recall_score(y_test_attacked, y_pred_adv, zero_division=0)
-    f1_adv = f1_score(y_test_attacked, y_pred_adv, zero_division=0)
-    
-    print("\n" + "="*50)
-    print(" 传统模型 (DT 3D) 遭遇黑盒迁移 PGD 攻击全局结果 ")
-    print("="*50)
-    print(f"攻击扰动幅度 (Epsilon)  = {EPSILON}")
-    print(f"攻击后全局 Accuracy (%)  = {acc_adv * 100:.2f}")
-    print(f"攻击后恶意 Precision (%) = {prec_adv * 100:.2f}")
-    print(f"攻击后恶意 Recall (%)    = {rec_adv * 100:.2f}")
-    print(f"攻击后恶意 F1-Score (%)  = {f1_adv * 100:.2f}")
-    print("="*50)
+
+    print("\n" + "="*70)
+    print(" 💥 传统模型 (DT 3D) 黑盒迁移 PGD 阶梯攻击崩溃结果 💥")
+    print("="*70)
+    print(f"{'Epsilon':<8} | {'Accuracy (%)':<13} | {'Precision (%)':<13} | {'Recall (%)':<13} | {'F1-Score (%)':<13}")
+    print("-" * 70)
+
+    # ================= 阶梯演进测试核心逻辑 =================
+    for eps in EPSILONS:
+        if eps == 0.0:
+            X_adv_np = X_ddos_clean # 0扰动即为洁净样本
+        else:
+            # 步长自适应：与深度学习模型测试保持绝对一致
+            alpha = eps / 5.0
+            X_adv_tensor = pgd_attack(surrogate, X_ddos_tensor, y_ddos_tensor, eps, alpha, NUM_ITER)
+            X_adv_np = X_adv_tensor.cpu().numpy()
+        
+        # 将生成的对抗样本与正常的 FE 流量重新拼合
+        X_test_attacked = np.vstack((X_adv_np, X_fe_clean))
+        y_test_attacked = np.hstack((y_ddos_true, y_fe_true)) 
+        
+        # 喂给未加防备的 DT 模型进行预测
+        y_pred_adv = dt_model.predict(X_test_attacked)
+        
+        # 计算针对恶意流量的核心指标
+        acc_adv = accuracy_score(y_test_attacked, y_pred_adv)
+        prec_adv = precision_score(y_test_attacked, y_pred_adv, zero_division=0)
+        rec_adv = recall_score(y_test_attacked, y_pred_adv, zero_division=0)
+        f1_adv = f1_score(y_test_attacked, y_pred_adv, zero_division=0)
+        
+        print(f"{eps:<8.1f} | {acc_adv*100:<13.2f} | {prec_adv*100:<13.2f} | {rec_adv*100:<13.2f} | {f1_adv*100:<13.2f}")
+
+    print("="*70)
 
 if __name__ == "__main__":
     main()
