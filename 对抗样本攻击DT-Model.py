@@ -141,7 +141,7 @@ def main():
     print("[*] 正在让 DT 模型对受污染的全局测试集进行预测...")
     y_pred_adv = dt_model.predict(X_test_attacked)
     
-    # 计算攻击后的全局四项核心指标 (使用 macro 平均)
+    # 【关键修改】去除了 average='macro'，默认的 binary 模式将直接反映对标签 1 (DDoS) 的识别能力
     acc_adv = accuracy_score(y_test_attacked, y_pred_adv)
     prec_adv = precision_score(y_test_attacked, y_pred_adv, zero_division=0)
     rec_adv = recall_score(y_test_attacked, y_pred_adv, zero_division=0)
@@ -152,11 +152,11 @@ def main():
     print("="*50)
     print(f"攻击扰动幅度 (Epsilon) : {EPSILON}")
     print(f"攻击后全局 Accuracy (%)  : {acc_adv * 100:.2f}")
-    print(f"攻击后全局 Precision (%) : {prec_adv * 100:.2f}")
-    print(f"攻击后全局 Recall (%)    : {rec_adv * 100:.2f}")
-    print(f"攻击后全局 F1-Score (%)  : {f1_adv * 100:.2f}")
+    print(f"攻击后恶意 Precision (%) : {prec_adv * 100:.2f}")
+    print(f"攻击后恶意 Recall (%)    : {rec_adv * 100:.2f}")
+    print(f"攻击后恶意 F1-Score (%)  : {f1_adv * 100:.2f}")
     print("="*50)
-    print("\n[专家分析]: 四项指标的全面暴跌，证明传统决策树的特征体系和边界已在对抗扰动下彻底失效！您可以直接将这组数据填入表 4-Y 中。")
+    print("\n[专家分析]: 精确率、召回率和 F1 分数的暴跌，直观反映了模型在面临对抗攻击时，将绝大多数恶意流量漏判为正常流量的致命缺陷。")
 
 if __name__ == "__main__":
     main()
