@@ -80,9 +80,9 @@ def main():
     df_ddos = pd.read_csv(DDOS_FILE).head(2000)
     
     feature_cols = [
+        'Size_Std', 'SizeStd_Change', 'SizeStd_MA', 
+        'SIP_Ent',  'SIPEnt_MA', 'SIPEnt_Change',
         'Rate', 'Rate_Accel', 'Rate_CV', 
-        'Entropy', 'Ent_Change', 'Ent_MA', 
-        'Size_Std', 'SizeStd_Change', 'SizeStd_MA'
     ]
     
     X = df_ddos[feature_cols].values
