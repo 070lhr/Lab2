@@ -7,7 +7,7 @@ import numpy as np
 from torch.utils.data import DataLoader, TensorDataset
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import accuracy_score, f1_score
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -126,7 +126,11 @@ def train_and_eval_ablation(model_name, model, train_loader, X_ddos, y_ddos, X_f
     
     with torch.no_grad():
         preds_clean = (model(X_mixed_clean) > 0.5).float().cpu().numpy().flatten()
+    
+    # 计算洁净环境的四大指标
     acc_clean = accuracy_score(y_mixed_true, preds_clean)
+    prec_clean = precision_score(y_mixed_true, preds_clean, zero_division=0)
+    rec_clean = recall_score(y_mixed_true, preds_clean, zero_division=0)
     f1_clean = f1_score(y_mixed_true, preds_clean, zero_division=0)
     
     # --- 评估 2：极限对抗环境 (Eps=0.8) ---
@@ -136,10 +140,18 @@ def train_and_eval_ablation(model_name, model, train_loader, X_ddos, y_ddos, X_f
     
     with torch.no_grad():
         preds_adv = (model(X_mixed_adv) > 0.5).float().cpu().numpy().flatten()
+        
+    # 计算极限环境的四大指标
     acc_adv = accuracy_score(y_mixed_true, preds_adv)
+    prec_adv = precision_score(y_mixed_true, preds_adv, zero_division=0)
+    rec_adv = recall_score(y_mixed_true, preds_adv, zero_division=0)
     f1_adv = f1_score(y_mixed_true, preds_adv, zero_division=0)
     
-    print(f"{model_name:<18} | {acc_clean*100:<10.2f} | {f1_clean*100:<10.2f} | {acc_adv*100:<10.2f} | {f1_adv*100:<10.2f}")
+    # --- 优雅的日志输出 ---
+    print(f"[{model_name}]")
+    print(f"  -> 洁净环境 (Eps=0.0): Acc={acc_clean*100:6.2f}% | Pre={prec_clean*100:6.2f}% | Rec={rec_clean*100:6.2f}% | F1={f1_clean*100:6.2f}%")
+    print(f"  -> 极限攻击 (Eps=0.8): Acc={acc_adv*100:6.2f}% | Pre={prec_adv*100:6.2f}% | Rec={rec_adv*100:6.2f}% | F1={f1_adv*100:6.2f}%")
+    print("-" * 80)
 
 def main():
     print("[*] 正在加载双路数据并构建完全对等的 1:1 实验场...")
@@ -165,37 +177,31 @@ def main():
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X)
     
-    # 划分训练集和测试集
     X_train, X_test, y_train, y_test = train_test_split(X_scaled, y, test_size=0.2, random_state=42, stratify=y)
     
     train_dataset = TensorDataset(torch.FloatTensor(X_train), torch.FloatTensor(y_train).unsqueeze(1))
     train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
     
-    # 分离出测试集中的 DDoS 和 FE 用于对抗重组
     ddos_mask = (y_test == 1.0)
     fe_mask = (y_test == 0.0)
     X_test_ddos, y_test_ddos = X_test[ddos_mask], y_test[ddos_mask]
     X_test_fe, y_test_fe = X_test[fe_mask], y_test[fe_mask]
 
     print("\n" + "="*80)
-    print(" 🔬 4.5.4 架构消融实验结果 (控制变量法) 🔬")
+    print(" 🔬 4.5.4 架构消融实验结果 (控制变量法 + 全指标) 🔬")
     print("="*80)
-    print(f"{'变体模型':<18} | {'洁净 Acc(%)':<10} | {'洁净 F1(%)':<10} | {'极限攻击 Acc(%)':<12} | {'极限攻击 F1(%)':<12}")
-    print("-" * 80)
     
-    # 依次训练和测试四个变体
     variants = [
-        ("Dist-Only (单流)", Dist_Only_Net()),
-        ("Dyn-Only (单流)", Dyn_Only_Net()),
-        ("No-Dropout (无隔离)", No_Dropout_Net()),
-        ("DPG-Net (Ours)", DPG_Net())
+        ("Dist-Only (单流-仅分布)", Dist_Only_Net()),
+        ("Dyn-Only (单流-仅动力学)", Dyn_Only_Net()),
+        ("No-Dropout (无隔离朴素融合)", No_Dropout_Net()),
+        ("DPG-Net (Ours 满血双流)", DPG_Net())
     ]
     
     for name, model in variants:
         train_and_eval_ablation(name, model, train_loader, X_test_ddos, y_test_ddos, X_test_fe, y_test_fe)
         
-    print("="*80)
-    print("[+] 实验完成！这组数据是支持您 4.5.4 节核心论点的绝佳武器！")
+    print("[+] 实验完成！")
 
 if __name__ == "__main__":
     main()
