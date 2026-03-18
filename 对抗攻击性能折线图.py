@@ -37,8 +37,8 @@ def plot_4x4_real_robustness_grid():
     f1_tcn = [97.52, 35.84, 0.00, 0.00, 0.00]
     f1_dpg = [100.00, 89.50, 84.73, 83.75, 83.75]
 
-    # 3. 创建 2x2 的子图画布 (保持致密尺寸)
-    fig, axs = plt.subplots(2, 2, figsize=(14, 10))
+    # 3. 创建 2x2 的子图画布 (结合之前柱状图的经验，稍微压低高度让版面更致密)
+    fig, axs = plt.subplots(2, 2, figsize=(14, 8.5))
     
     # 统一线条样式
     styles = {
@@ -63,8 +63,8 @@ def plot_4x4_real_robustness_grid():
         
         ax.set_ylabel(ylabel, fontsize=14, fontweight='bold')
         
-        # 【修改 1】：将 labelpad 从 8 大幅缩小至 2，防止文字过度往下顶出物理间隙
-        ax.set_xlabel(f'Epsilon\n{sub_id}', fontsize=14, fontweight='bold', labelpad=2)
+        # 【修改 1】：将原先的 Epsilon 替换为数学符号 $\epsilon$ (使用 rf 字符串)
+        ax.set_xlabel(rf'$\epsilon$'+'\n'+f'{sub_id}', fontsize=16, fontweight='bold', labelpad=2)
 
     # 4. 绘图
     plot_subplot(axs[0, 0], acc_dt, acc_dnn, acc_tcn, acc_dpg, '准确率(%)', '(a)')
@@ -77,12 +77,12 @@ def plot_4x4_real_robustness_grid():
     fig.legend(handles, labels, loc='lower center', bbox_to_anchor=(0.5, 0.98), 
                ncol=4, fontsize=14, fancybox=True, shadow=True, framealpha=0.95)
 
-    # 【修改 2】：将 h_pad (垂直填充距) 从 2.5 暴降至 0.8，彻底消灭上下两排之间的巨大断层
+    # 【修改 2】：紧凑化布局
     plt.tight_layout(h_pad=0.8, w_pad=2.0, rect=[0, 0, 1, 0.96])
     
     # 6. 保存图片
     plt.savefig(OUTPUT_IMG, dpi=300, bbox_inches='tight')
-    print(f"\n[+] 完美！压实版退化组图已生成并保存为: {OUTPUT_IMG}")
+    print(f"\n[+] 完美！数学符号版退化组图已生成并保存为: {OUTPUT_IMG}")
 
 if __name__ == "__main__":
     plot_4x4_real_robustness_grid()
