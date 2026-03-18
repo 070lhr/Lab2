@@ -13,7 +13,7 @@ import sys
 INPUT_DIR = '/data/exp/hrliu/1998WC/WorldCupCSV/'
 
 # 输出：图片保存路径
-OUTPUT_IMG = './wc98_day71_74_traffic_clean.png'
+OUTPUT_IMG = './98WC数据示意图.png'
 
 # 筛选范围：只保留这几天的数据
 TARGET_DAYS = [72, 73, 74, 75]
