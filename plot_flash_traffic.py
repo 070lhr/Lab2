@@ -86,6 +86,7 @@ def plot_labeled_days(input_dir, output_img):
             # 转换为 DataFrame 并添加时间列
             seg_df = counts.reset_index()
             seg_df.columns = ['timestamp', 'count']
+            # 将 Unix 时间戳转换为 datetime
             seg_df['datetime'] = pd.to_datetime(seg_df['timestamp'], unit='s')
             
             # 存入列表
@@ -105,27 +106,62 @@ def plot_labeled_days(input_dir, output_img):
     # 2. 绘图设置
     plt.figure(figsize=(18, 8), dpi=300) 
     
-    # 设定统一的颜色
+    # 设定统一的曲线颜色
     main_plot_color = 'steelblue' 
     max_y_val = 0 
 
-    # 3. 循环绘制每一段 (彻底取消了分隔线和标签标注)
+    # 3. 循环绘制每一段曲线
     for idx, (fname, df) in enumerate(data_segments):
-        
         # 绘制纯净曲线
         plt.plot(df['datetime'], df['count'], color=main_plot_color, linewidth=1)
-        
         # 更新最大Y值用于后面设置范围
         current_max = df['count'].max()
         if current_max > max_y_val:
             max_y_val = current_max
 
-    # 4. 图表美化
+    # === 核心修改：添加阴影框和提取区间标注 ===
+
+    # 1. 视觉上估计最高的波峰区域。
+    # 从图形估计：峰值刻度是 07-08 01:00。
+    # 我们将定义一个视觉上框选出“最高的波峰区域”的范围。
+    
+    # ================= 重要说明 =================
+    # 由于我没有具体年份信息，我使用了 Pandas 的 datetime 方法。
+    # 请将下面的 '2024' 替换为实际数据的年份，才能使标注正确地落在 X 轴上。
+    # ===========================================
+    shade_start_str = '2024-07-07 18:00:00'
+    shade_end_str = '2024-07-08 06:00:00'
+    
+    # 创建具体的 pandas 时间戳
+    shade_start = pd.to_datetime(shade_start_str)
+    shade_end = pd.to_datetime(shade_end_str)
+    
+    # 添加半透明的淡蓝色阴影框（plt.axvspan）
+    # 用于跨越 X 轴定义垂直跨度
+    # xmin 和 xmax 参数必须是 datetime 对象
+    plt.axvspan(shade_start, shade_end, color='lightblue', alpha=0.3)
+    
+    # 2. 定义箭头和标注的位置
+    # 计算阴影区域的中点
+    shade_mid = shade_start + (shade_end - shade_start) / 2
+    
+    # 添加虚线箭头和文本
+    # 使用 annotate 将文本和箭头结合
+    plt.annotate(
+        '提取区间（Extracted Region）', 
+        xy=(shade_mid, max_y_val * 1.05), # 箭头的终点：位于阴影区域顶部上方
+        xytext=(shade_mid, max_y_val * 1.15), # 文本和箭头的起点：高于终点
+        arrowprops=dict(facecolor='black', edgecolor='black', arrowstyle='->', linestyle='--'),
+        ha='center', va='center', fontsize=10, fontweight='bold',
+        fontproperties=my_font # 确保使用相同的字体
+    )
+
+    # 4. 图表美化 (更新 Y 轴范围)
     plt.xlabel('时间', fontproperties=my_font)
     plt.ylabel('每秒请求次数', fontproperties=my_font)
     
-    # Y轴从0开始，顶部留出 5% 的空间即可
-    plt.ylim(0, max_y_val * 1.05)
+    # 扩大 Y 轴范围以容纳新的标注 (从 1.05 改为 1.3)
+    plt.ylim(0, max_y_val * 1.3)
     
     # X轴格式化
     plt.gca().xaxis.set_major_formatter(mdates.DateFormatter('%m-%d %H:00'))
