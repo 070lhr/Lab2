@@ -105,7 +105,7 @@ def train_model():
     
     print(f"\n>>> [阶段 2/4] DPG-Net 模型训练 (Device: {DEVICE})...")
     model = DPG_Net().to(DEVICE)
-    optimizer = optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=1e-4) [cite: 282]
+    optimizer = optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=1e-4)
     criterion = nn.BCELoss()
     
     # 使用 tqdm 封装 epoch 循环
