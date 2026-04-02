@@ -10,7 +10,7 @@ from sklearn.utils import shuffle
 
 # ================= 配置区域 =================
 # 输入：指定的单个 PCAP 文件路径 (注意：dpkt只能解析.pcap/.pcapng，不能解析.csv)
-INPUT_FILE = '/data/exp/hrliu/CIC2023/DDoS-HTTP_Flood-.pcap' 
+INPUT_FILE = '"/data/exp/hrliu/CIC2023/pcap/DDoS-HTTP_Flood-.pcap"' 
 
 # 输出：最终生成的 CSV 文件
 OUTPUT_CSV = './ciciot_http_flood_9dim.csv'
