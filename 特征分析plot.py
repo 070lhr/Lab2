@@ -7,7 +7,7 @@ from matplotlib.font_manager import FontProperties
 
 # ================= 配置 =================
 FLASH_FILE = './flash_event_9dim_full.csv'
-DDOS_FILE = './ciciot_http_flood_9dim.csv'
+DDOS_FILE = './ciciot_ddos_9dim_full.csv'
 OUTPUT_IMG = 'all_9_features_distribution_full_percent.png'
 
 # 指定微软雅黑字体文件路径及字号
