@@ -201,66 +201,122 @@ def evaluate_model(model, test_loader):
     print(classification_report(y_true, y_pred, target_names=['Flash', 'DDoS'], digits=4))
     print("-" * 30)
 
-def run_shap_analysis(model, X_test):
-    print("\n>>> [阶段 4/4] SHAP 解释性归因分析...")
-    print("  [提示] 正在使用 GradientExplainer 计算高维特征梯度，这可能需要 1-3 分钟，请稍候...")
+# ================= 新增：PGD 对抗攻击生成模块 =================
+def pgd_attack(model, X, y, epsilon=0.8, alpha=0.1, num_iter=10):
+    """
+    投影梯度下降 (PGD) 攻击
+    严格对应大论文 4.3.5 节面向白盒攻击的鲁棒性基准公式 (4-21)
+    """
+    print(f"\n>>> [对抗攻击] 正在使用 PGD 算法生成对抗测试集 (epsilon={epsilon})...")
+    # 临时禁用 cuDNN，以支持对 GRU 的输入求导
+    torch.backends.cudnn.enabled = False
+    model.eval()
     
-    model.eval()  
-    # 继续保持禁用 cuDNN 加速，以支持 GRU 的反向传播图提取
+    X_tensor = torch.tensor(X, dtype=torch.float32).to(DEVICE)
+    y_tensor = torch.tensor(y, dtype=torch.float32).unsqueeze(1).to(DEVICE)
+    criterion = nn.BCELoss()
+
+    # 1. 随机初始化扰动 (在 -epsilon 到 epsilon 之间)
+    delta = torch.empty_like(X_tensor).uniform_(-epsilon, epsilon)
+    X_adv = X_tensor + delta
+
+    # 记录数据集边界，防止扰动后超出物理实际意义的极值
+    X_min, X_max = X_tensor.min(), X_tensor.max()
+    X_adv = torch.clamp(X_adv, min=X_min, max=X_max)
+
+    # 2. 多步迭代寻优
+    for i in range(num_iter):
+        X_adv.requires_grad = True
+        outputs = model(X_adv)
+        
+        # 我们希望最大化损失函数，让模型分类错误
+        loss = criterion(outputs, y_tensor)
+        
+        model.zero_grad()
+        loss.backward()
+        
+        with torch.no_grad():
+            # 沿着梯度符号方向前进 (FGSM 的迭代版)
+            adv_step = alpha * X_adv.grad.sign()
+            X_adv = X_adv + adv_step
+            
+            # 投影回 L_inf 范数的 epsilon 邻域内
+            eta = torch.clamp(X_adv - X_tensor, min=-epsilon, max=epsilon)
+            X_adv = X_tensor + eta
+            
+            # 再次截断至特征真实边界
+            X_adv = torch.clamp(X_adv, min=X_min, max=X_max)
+
+    torch.backends.cudnn.enabled = True
+    return X_adv.cpu().numpy()
+
+def run_adversarial_shap_analysis(model, X_test_clean, y_test):
+    print("\n>>> [阶段 4/4] 极限对抗环境下的 SHAP 归因分析...")
+    
+    # 1. 生成被高强度干扰的对抗测试集 (设定论文里的极限扰动 0.8)
+    X_test_adv = pgd_attack(model, X_test_clean, y_test, epsilon=0.8, alpha=0.1, num_iter=10)
+    
+    # 2. 评估对抗攻击后的模型性能 (验证内生鲁棒性下界)
+    model.eval()
+    with torch.no_grad():
+        outputs_adv = model(torch.tensor(X_test_adv, dtype=torch.float32).to(DEVICE))
+        y_pred_adv = (outputs_adv > 0.5).cpu().numpy()
+        
+    print("\n>>> [对抗攻击后] 模型检测性能：")
+    print("-" * 30)
+    print(classification_report(y_test, y_pred_adv, target_names=['Flash', 'DDoS'], digits=4))
+    print("-" * 30)
+
+    # 3. 开始对抗样本的 SHAP 计算
+    print("  [提示] 正在使用 GradientExplainer 解释【对抗样本】，耗时较长，请稍候...")
     torch.backends.cudnn.enabled = False
     
-    # 抽取背景样本和待解释样本
-    bg_data = torch.tensor(X_test[np.random.choice(X_test.shape[0], 100, replace=False)], dtype=torch.float32).to(DEVICE)
-    test_data = torch.tensor(X_test[np.random.choice(X_test.shape[0], 200, replace=False)], dtype=torch.float32).to(DEVICE)
+    # 背景样本依旧使用干净的，但解释的对象变成对抗样本
+    bg_data = torch.tensor(X_test_clean[np.random.choice(X_test_clean.shape[0], 100, replace=False)], dtype=torch.float32).to(DEVICE)
+    # 取 200 个对抗样本进行解释
+    test_data_adv = torch.tensor(X_test_adv[np.random.choice(X_test_adv.shape[0], 200, replace=False)], dtype=torch.float32).to(DEVICE)
     
     start_time = time.time()
-    
-    # ================= 核心修复 =================
-    # 弃用 DeepExplainer，改用 GradientExplainer
-    # 完美解决由于 DCN 显式交叉层张量乘法 (x0 * cross) 导致的加和属性(Additivity)崩溃问题
     explainer = shap.GradientExplainer(model, bg_data)
-    shap_values = explainer.shap_values(test_data)
+    shap_values = explainer.shap_values(test_data_adv)
     
-    # 针对 PyTorch 单节点输出，GradientExplainer 可能返回包含单元素的 list，此处做解包处理
     if isinstance(shap_values, list):
         shap_values = shap_values[0]
-    # ============================================
-    
+        
     end_time = time.time()
-    
-    # 恢复环境配置
     torch.backends.cudnn.enabled = True
-    
     print(f"  [+] SHAP 计算完成，耗时: {end_time - start_time:.2f}s")
 
-    print("  [*] 正在配置本地双字体 (Times New Roman + SimSun)...")
+    # 配置字体 (保持原样)
     try:
         fm.fontManager.addfont(SIMSUN_FONT_PATH)
         fm.fontManager.addfont(TIMES_FONT_PATH)
-        
-        simsun_name = fm.FontProperties(fname=SIMSUN_FONT_PATH).get_name()
-        times_name = fm.FontProperties(fname=TIMES_FONT_PATH).get_name()
-        
-        plt.rcParams['font.sans-serif'] = [times_name, simsun_name]
+        plt.rcParams['font.sans-serif'] = [fm.FontProperties(fname=TIMES_FONT_PATH).get_name(), 
+                                           fm.FontProperties(fname=SIMSUN_FONT_PATH).get_name()]
         plt.rcParams['axes.unicode_minus'] = False 
-    except Exception as e:
-        print(f"  [!] 字体加载失败，请检查文件路径是否正确。错误信息: {e}")
-        print(f"  [!] 将使用系统默认字体回退方案...")
+    except Exception:
         plt.rcParams['axes.unicode_minus'] = False
     
-    print("  [*] 正在生成特征重要性柱状图...")
+    # 绘图并保存 (加上 adv 后缀加以区分)
+    print("  [*] 正在生成对抗环境下的重要性柱状图...")
     plt.figure()
-    shap.summary_plot(shap_values, test_data.cpu().numpy(), feature_names=FEATURE_COLS, plot_type="bar", show=False)
-    plt.savefig("shap_bar_real.png", dpi=300, bbox_inches='tight')
+    shap.summary_plot(shap_values, test_data_adv.cpu().numpy(), feature_names=FEATURE_COLS, plot_type="bar", show=False)
+    plt.savefig("shap_bar_adv.png", dpi=300, bbox_inches='tight')
     
-    print("  [*] 正在生成决策机制蜂群图...")
+    print("  [*] 正在生成对抗环境下的决策机制蜂群图...")
     plt.figure()
-    shap.summary_plot(shap_values, test_data.cpu().numpy(), feature_names=FEATURE_COLS, show=False)
-    plt.savefig("shap_beeswarm_real.png", dpi=300, bbox_inches='tight')
+    shap.summary_plot(shap_values, test_data_adv.cpu().numpy(), feature_names=FEATURE_COLS, show=False)
+    plt.savefig("shap_beeswarm_adv.png", dpi=300, bbox_inches='tight')
     
-    print(f"\n[任务完成] 所有结果已保存至当前目录。")
-    
+    print(f"\n[任务完成] 对抗攻击与解释结果已保存！")
+
+# ================= 替换 Main 函数的执行流程 =================
 if __name__ == "__main__":
-    trained_model, test_loader, X_test_raw = train_model()
+    trained_model, test_loader, X_test_clean = train_model()
     evaluate_model(trained_model, test_loader)
-    run_shap_analysis(trained_model, X_test_raw)
+    
+    # 获取完整的 y_test 用于生成对抗样本
+    y_test_full = torch.cat([y for _, y in test_loader], dim=0).numpy().squeeze()
+    
+    # 运行对抗攻击下的 SHAP 分析
+    run_adversarial_shap_analysis(trained_model, X_test_clean, y_test_full)
