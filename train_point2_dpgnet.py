@@ -7,12 +7,13 @@ import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import classification_report, confusion_matrix
+from sklearn.metrics import classification_report
 import joblib 
 import os
 import shap 
 import matplotlib.pyplot as plt
-from tqdm import tqdm  # 用于显示进度条
+import matplotlib.font_manager as fm  
+from tqdm import tqdm  
 import time
 
 # 忽略不必要的警告
@@ -24,17 +25,21 @@ DDOS_FILE = './ciciot_ddos_9dim_full.csv'
 MODEL_SAVE_PATH = './dpg_net_model.pth'
 SCALER_SAVE_PATH = './dpg_scaler.pkl'
 
+# 本地字体文件路径配置 (请确保文件名大小写和实际文件一致)
+SIMSUN_FONT_PATH = './SIMSUN.TTC'  # 宋体文件路径
+TIMES_FONT_PATH = './TIMES.TTF'    # Times New Roman 文件路径
+
 BATCH_SIZE = 64
 LEARNING_RATE = 0.0005
 EPOCHS = 50
-DROPOUT_RATE = 0.5
+DROPOUT_RATE = 0.3  # 融合层的隐式特征丢弃率
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# 严格匹配论文 4.2 节定义的 9 维双流特征列名
+# 严格匹配定义的 9 维双流特征列名
 FEATURE_COLS = [
-    'Rate', 'Rate_Accel', 'Rate_CV',           # 动力学流 [cite: 384]
-    'SIP_Ent', 'SIPEnt_Change', 'SIPEnt_MA',   # 分布流-熵 [cite: 361]
-    'Size_Std', 'SizeStd_Change', 'SizeStd_MA' # 分布流-载荷 [cite: 361]
+    'Rate', 'Rate_Accel', 'Rate_CV',           # 动力学流 
+    'SIP_Ent', 'SIPEnt_Change', 'SIPEnt_MA',   # 分布流-熵 
+    'Size_Std', 'SizeStd_Change', 'SizeStd_MA' # 分布流-载荷 
 ]
 # ===========================================
 
@@ -45,37 +50,91 @@ class TrafficDataset(Dataset):
     def __len__(self): return len(self.X)
     def __getitem__(self, idx): return self.X[idx], self.y[idx]
 
+# ================= 1. 统计分布特征：显式交叉网络 (DCN) =================
+class CrossLayer(nn.Module):
+    """
+    单层显式交叉网络：
+    x_{l} = x_{0} ⊙ (x_{l-1} W_{cross}^l + b_{cross}^l) + x_{l-1}
+    """
+    def __init__(self, dim):
+        super(CrossLayer, self).__init__()
+        self.weight = nn.Parameter(torch.Tensor(dim, dim))
+        self.bias = nn.Parameter(torch.Tensor(dim))
+        nn.init.xavier_uniform_(self.weight)
+        nn.init.zeros_(self.bias)
+
+    def forward(self, x0, xl):
+        cross_term = torch.matmul(xl, self.weight) + self.bias
+        return x0 * cross_term + xl
+
+class DistBranchDCN(nn.Module):
+    """
+    基于显式交叉机制的统计分布特征映射支路
+    输入6维 -> 扩展至32维 -> 2层交叉网络
+    """
+    def __init__(self, in_features=6, embed_dim=32, num_layers=2):
+        super(DistBranchDCN, self).__init__()
+        self.expand_layer = nn.Sequential(
+            nn.Linear(in_features, embed_dim),
+            nn.ReLU()
+        )
+        self.cross_layers = nn.ModuleList([CrossLayer(embed_dim) for _ in range(num_layers)])
+
+    def forward(self, x):
+        x0 = self.expand_layer(x)  
+        xl = x0
+        for layer in self.cross_layers:
+            xl = layer(x0, xl)     
+        return xl                  
+
+# ================= 2. 动力学特征：门控循环单元 (GRU) =================
+class DynBranchGRU(nn.Module):
+    """
+    基于门控循环单元的动力学特征时序聚合支路
+    输入3维 -> 输出16维
+    """
+    def __init__(self, in_features=3, hidden_dim=16):
+        super(DynBranchGRU, self).__init__()
+        self.gru = nn.GRU(input_size=in_features, hidden_size=hidden_dim, batch_first=True)
+
+    def forward(self, x):
+        # 增加 seq_len=1 维度以适配 GRU 的三维输入要求 (batch, seq, feature)
+        x = x.unsqueeze(1) 
+        output, hidden = self.gru(x)
+        return hidden.squeeze(0)
+
+# ================= 3. 融合网络：DPDADFE 核心架构 =================
 class DPG_Net(nn.Module):
-    def __init__(self):
+    """
+    双流感知应用层 DDoS 攻击与 FE 区分模型总体架构
+    """
+    def __init__(self, dropout_rate=0.3):
         super(DPG_Net, self).__init__()
-        # 动力学分支：处理 3 维核心动力学特征 [cite: 353, 418]
-        self.dynamics_branch = nn.Sequential(
-            nn.Linear(3, 32), nn.BatchNorm1d(32), nn.ReLU(),
-            nn.Linear(32, 16), nn.ReLU()
-        )
-        # 分布分支：处理 6 维统计分布特征 [cite: 353, 407]
-        self.dist_branch = nn.Sequential(
-            nn.Linear(6, 64), nn.BatchNorm1d(64), nn.ReLU(),
-            nn.Linear(64, 32), nn.ReLU()
-        )
-        # 融合与决策层 [cite: 429]
-        self.fusion_layer = nn.Sequential(
-            nn.Linear(16 + 32, 64), nn.ReLU(),
-            nn.Dropout(0.3), nn.Linear(64, 1)
-        )
+        self.dynamics_branch = DynBranchGRU(in_features=3, hidden_dim=16)
+        self.dist_branch = DistBranchDCN(in_features=6, embed_dim=32, num_layers=2)
+        
+        # 隐式特征丢弃正则化机制
+        self.fusion_dropout = nn.Dropout(p=dropout_rate)
+        
+        # 全局融合决策层，输入维度 32 + 16 = 48
+        self.classifier = nn.Linear(48, 1)
         self.sigmoid = nn.Sigmoid()
 
-    def forward(self, x, training_mode=False):
-        if training_mode and torch.rand(1).item() < DROPOUT_RATE:
-            mask = torch.ones_like(x)
-            mask[:, 3:] = 0 # 随机遮蔽分布流特征，强化动力学特征学习 [cite: 356, 431]
-            x = x * mask
-        
+    def forward(self, x):
+        # 1. 异构特征分离提取
         out_dyn = self.dynamics_branch(x[:, 0:3])
         out_dist = self.dist_branch(x[:, 3:9])
-        combined = torch.cat((out_dyn, out_dist), dim=1)
-        return self.sigmoid(self.fusion_layer(combined))
+        
+        # 2. 特征级联：构建 48 维全局联合表征向量
+        h_concat = torch.cat((out_dyn, out_dist), dim=1)
+        
+        # 3. 隐式特征丢弃机制与分类输出
+        h_drop = self.fusion_dropout(h_concat)
+        out = self.sigmoid(self.classifier(h_drop))
+        
+        return out
 
+# ================= 主流程函数 =================
 def load_and_preprocess():
     print("\n>>> [阶段 1/4] 数据预处理与标准化...")
     if not (os.path.exists(FLASH_FILE) and os.path.exists(DDOS_FILE)):
@@ -104,19 +163,18 @@ def train_model():
     test_loader = DataLoader(TrafficDataset(X_test, y_test), batch_size=BATCH_SIZE, shuffle=False)
     
     print(f"\n>>> [阶段 2/4] DPG-Net 模型训练 (Device: {DEVICE})...")
-    model = DPG_Net().to(DEVICE)
+    model = DPG_Net(dropout_rate=DROPOUT_RATE).to(DEVICE)
     optimizer = optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=1e-4)
     criterion = nn.BCELoss()
     
-    # 使用 tqdm 封装 epoch 循环
     pbar = tqdm(range(EPOCHS), desc="训练进度")
     for epoch in pbar:
-        model.train()
+        model.train()  # 开启训练模式，激活 Dropout
         total_loss = 0
         for inputs, labels in train_loader:
             inputs, labels = inputs.to(DEVICE), labels.to(DEVICE)
             optimizer.zero_grad()
-            outputs = model(inputs, training_mode=True)
+            outputs = model(inputs)
             loss = criterion(outputs, labels)
             loss.backward()
             optimizer.step()
@@ -131,11 +189,11 @@ def train_model():
 
 def evaluate_model(model, test_loader):
     print("\n>>> [阶段 3/4] 常规检测性能评估...")
-    model.eval()
+    model.eval()  # 开启评估模式，关闭 Dropout
     y_true, y_pred = [], []
     with torch.no_grad():
         for inputs, labels in test_loader:
-            outputs = model(inputs.to(DEVICE), training_mode=False)
+            outputs = model(inputs.to(DEVICE))
             y_true.extend(labels.numpy())
             y_pred.extend((outputs > 0.5).cpu().numpy())
     
@@ -146,7 +204,8 @@ def evaluate_model(model, test_loader):
 def run_shap_analysis(model, X_test):
     print("\n>>> [阶段 4/4] SHAP 解释性归因分析...")
     print("  [提示] SHAP 正在计算高维空间的特征梯度，这可能需要 1-3 分钟，请稍候...")
-    model.eval()
+    
+    model.eval()  # 确保在计算 SHAP 前关闭 Dropout，保证梯度回传的稳定性
     
     # 抽取背景样本和待解释样本
     bg_data = torch.tensor(X_test[np.random.choice(X_test.shape[0], 100, replace=False)], dtype=torch.float32).to(DEVICE)
@@ -159,20 +218,32 @@ def run_shap_analysis(model, X_test):
     
     print(f"  [+] SHAP 计算完成，耗时: {end_time - start_time:.2f}s")
 
-    # 绘图逻辑
-    plt.rcParams['font.sans-serif'] = ['SimHei']; plt.rcParams['axes.unicode_minus'] = False
+    print("  [*] 正在配置本地双字体 (Times New Roman + SimSun)...")
+    try:
+        fm.fontManager.addfont(SIMSUN_FONT_PATH)
+        fm.fontManager.addfont(TIMES_FONT_PATH)
+        
+        simsun_name = fm.FontProperties(fname=SIMSUN_FONT_PATH).get_name()
+        times_name = fm.FontProperties(fname=TIMES_FONT_PATH).get_name()
+        
+        plt.rcParams['font.sans-serif'] = [times_name, simsun_name]
+        plt.rcParams['axes.unicode_minus'] = False 
+    except Exception as e:
+        print(f"  [!] 字体加载失败，请检查文件路径是否正确。错误信息: {e}")
+        print(f"  [!] 将使用系统默认字体回退方案...")
+        plt.rcParams['axes.unicode_minus'] = False
     
     print("  [*] 正在生成特征重要性柱状图...")
     plt.figure()
     shap.summary_plot(shap_values, test_data.cpu().numpy(), feature_names=FEATURE_COLS, plot_type="bar", show=False)
     plt.savefig("shap_bar_real.png", dpi=300, bbox_inches='tight')
     
-    print("  [*] 正在生成决策机制蜂巢图...")
+    print("  [*] 正在生成决策机制蜂群图...")
     plt.figure()
     shap.summary_plot(shap_values, test_data.cpu().numpy(), feature_names=FEATURE_COLS, show=False)
     plt.savefig("shap_beeswarm_real.png", dpi=300, bbox_inches='tight')
     
-    print(f"\n[任务完成] 所有结果已保存至当前目录。祝你大论文顺利！")
+    print(f"\n[任务完成] 所有结果已保存至当前目录。")
 
 if __name__ == "__main__":
     trained_model, test_loader, X_test_raw = train_model()
