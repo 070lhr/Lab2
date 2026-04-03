@@ -85,30 +85,33 @@ class DynBranchGRU(nn.Module):
 
 # ================= 3. 核心架构：DPDADFE (含隐式丢弃修正) =================
 class DPG_Net(nn.Module):
-    def __init__(self, dist_drop_p=0.8): 
+    # 将丢弃率下调至 0.5，平衡洁净状态与对抗状态的权重分布
+    def __init__(self, dist_drop_p=0.5): 
         super(DPG_Net, self).__init__()
         self.dynamics_branch = DynBranchGRU(in_features=3, hidden_dim=16)
         self.dist_branch = DistBranchDCN(in_features=6, embed_dim=32, num_layers=2)
         
         self.dist_drop_p = dist_drop_p
         
-        self.classifier = nn.Linear(48, 1) 
+        # 核心修改：将单层分类器升级为非线性缓冲分类器
+        # 增强模型在高维特征受到 PGD 干扰时的决策容错率
+        self.classifier = nn.Sequential(
+            nn.Linear(48, 32),
+            nn.ReLU(),
+            nn.Linear(32, 1)
+        )
         self.sigmoid = nn.Sigmoid()
 
     def forward(self, x):
         out_dyn = self.dynamics_branch(x[:, 0:3])
         out_dist = self.dist_branch(x[:, 3:9])
         
-        # ====== 核心修改：模态级隐式丢弃 (Modality Dropout) ======
-        # 严格对应论文：以概率 p 整体遮蔽易受篡改的分布表征流
+        # 模态级隐式丢弃机制
         if self.training:
-            # 生成形状为 (Batch, 1) 的掩码，确保同一批次样本的32维特征被同时保留或同时置0
             mask = (torch.rand(out_dist.size(0), 1, device=out_dist.device) > self.dist_drop_p).float()
-            # 乘以 1/(1-p) 进行期望值补偿，保持前向传播尺度一致
             out_dist_dropped = out_dist * mask / (1.0 - self.dist_drop_p)
         else:
             out_dist_dropped = out_dist
-        # ==========================================================
         
         h_concat = torch.cat((out_dyn, out_dist_dropped), dim=1)
         out = self.sigmoid(self.classifier(h_concat))
@@ -210,7 +213,7 @@ def main():
     # 2. 模型训练
     print(f"\n>>> [阶段 2/4] DPG-Net 模型训练...")
     train_loader = DataLoader(TrafficDataset(X_train, y_train), batch_size=BATCH_SIZE, shuffle=True)
-    model = DPG_Net(dist_drop_p=0.8).to(DEVICE)
+    model = DPG_Net(dist_drop_p=0.5).to(DEVICE)
     optimizer = optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=1e-4)
     criterion = nn.BCELoss()
     
