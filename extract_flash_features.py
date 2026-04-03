@@ -19,7 +19,7 @@ OUTPUT_CSV = './flash_event_9dim_full.csv'
 LABEL = 0
 
 # 4. 速率阈值：只保留每秒请求数 > 500 的样本
-RATE_THRESHOLD = 500
+RATE_THRESHOLD = 700
 
 # 5. 窗口大小 (用于计算 CV, MA)
 WINDOW_SIZE = 5
