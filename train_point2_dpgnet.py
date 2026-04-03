@@ -143,11 +143,11 @@ def pgd_attack(model, X, y, epsilon=0.8, alpha=0.2, num_iter=20):
 
 # ================= SHAP 可视化 (换回更规整的白盒梯度解释器) =================
 def generate_shap_plots(model, X_test, bg_data, title_prefix, file_suffix):
-    model.eval()
-    print(f"  [*] 正在计算 {title_prefix} 环境的 SHAP 归因，请稍候...")
-    start_time = time.time()
-    
     torch.backends.cudnn.enabled = False
+    model.eval()
+    
+    print(f"  [*] 正在计算 {title_prefix} 环境的 SHAP 梯度，请稍候...")
+    start_time = time.time()
     explainer = shap.GradientExplainer(model, bg_data)
     shap_values = explainer.shap_values(X_test)
     
@@ -157,6 +157,25 @@ def generate_shap_plots(model, X_test, bg_data, title_prefix, file_suffix):
     print(f"  [+] SHAP 计算完成，耗时: {time.time() - start_time:.2f}s")
     torch.backends.cudnn.enabled = True
 
+    # ================= 核心新增：导出数据为 CSV =================
+    # 将 Tensor 转换为 numpy 数组
+    x_test_np = X_test.cpu().numpy()
+    
+    # 转换为 DataFrame 方便保存
+    df_x = pd.DataFrame(x_test_np, columns=FEATURE_COLS)
+    df_shap = pd.DataFrame(shap_values, columns=FEATURE_COLS)
+    
+    # 保存到当前目录
+    file_x = f"data_X_test_{file_suffix}.csv"
+    file_shap = f"data_shap_values_{file_suffix}.csv"
+    df_x.to_csv(file_x, index=False)
+    df_shap.to_csv(file_shap, index=False)
+    print(f"  [+] 绘图底层数据已成功导出！")
+    print(f"      - 原始特征数据: {file_x}")
+    print(f"      - SHAP 贡献值: {file_shap}")
+    # ============================================================
+
+    # 原有的预览绘图代码保持不变，供你跑完直接看个大概
     try:
         fm.fontManager.addfont(SIMSUN_FONT_PATH)
         fm.fontManager.addfont(TIMES_FONT_PATH)
@@ -168,12 +187,12 @@ def generate_shap_plots(model, X_test, bg_data, title_prefix, file_suffix):
         plt.rcParams['axes.unicode_minus'] = False
 
     plt.figure()
-    shap.summary_plot(shap_values, X_test.cpu().numpy(), feature_names=FEATURE_COLS, plot_type="bar", show=False)
+    shap.summary_plot(shap_values, x_test_np, feature_names=FEATURE_COLS, plot_type="bar", show=False)
     plt.savefig(f"shap_bar_{file_suffix}.png", dpi=300, bbox_inches='tight')
     plt.close()
     
     plt.figure()
-    shap.summary_plot(shap_values, X_test.cpu().numpy(), feature_names=FEATURE_COLS, show=False)
+    shap.summary_plot(shap_values, x_test_np, feature_names=FEATURE_COLS, show=False)
     plt.savefig(f"shap_beeswarm_{file_suffix}.png", dpi=300, bbox_inches='tight')
     plt.close()
 
