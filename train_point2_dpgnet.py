@@ -85,31 +85,39 @@ class DynBranchGRU(nn.Module):
 
 # ================= 3. 核心架构：DPDADFE (含隐式丢弃修正) =================
 class DPG_Net(nn.Module):
-    def __init__(self, dist_drop_p=0.8): # 核心修改：非对称高强度丢弃
+    def __init__(self, dist_drop_p=0.8): 
         super(DPG_Net, self).__init__()
         self.dynamics_branch = DynBranchGRU(in_features=3, hidden_dim=16)
         self.dist_branch = DistBranchDCN(in_features=6, embed_dim=32, num_layers=2)
         
-        # 仅针对容易被篡改的统计分布特征施加高强度失活，逼迫网络依赖动力学特征
-        self.dist_dropout = nn.Dropout(p=dist_drop_p)
+        self.dist_drop_p = dist_drop_p
         
-        self.classifier = nn.Linear(48, 1) # 32 + 16 = 48
+        self.classifier = nn.Linear(48, 1) 
         self.sigmoid = nn.Sigmoid()
 
     def forward(self, x):
         out_dyn = self.dynamics_branch(x[:, 0:3])
         out_dist = self.dist_branch(x[:, 3:9])
         
-        # 施加非对称隐式特征丢弃
-        out_dist_dropped = self.dist_dropout(out_dist)
+        # ====== 核心修改：模态级隐式丢弃 (Modality Dropout) ======
+        # 严格对应论文：以概率 p 整体遮蔽易受篡改的分布表征流
+        if self.training:
+            # 生成形状为 (Batch, 1) 的掩码，确保同一批次样本的32维特征被同时保留或同时置0
+            mask = (torch.rand(out_dist.size(0), 1, device=out_dist.device) > self.dist_drop_p).float()
+            # 乘以 1/(1-p) 进行期望值补偿，保持前向传播尺度一致
+            out_dist_dropped = out_dist * mask / (1.0 - self.dist_drop_p)
+        else:
+            out_dist_dropped = out_dist
+        # ==========================================================
         
         h_concat = torch.cat((out_dyn, out_dist_dropped), dim=1)
         out = self.sigmoid(self.classifier(h_concat))
         return out
 
 # ================= PGD 攻击 (含物理约束修正) =================
-def pgd_attack(model, X, y, epsilon=0.8, alpha=0.1, num_iter=10):
-    print(f"\n>>> [对抗生成] 执行受物理约束的 PGD 算法 (epsilon={epsilon})...")
+def pgd_attack(model, X, y, epsilon=0.8, alpha=0.2, num_iter=20):
+    # 增加 num_iter=20 和 alpha=0.2，确保对抗噪声足以将分布特征推入 ReLU 的死区(Dead Zone)
+    print(f"\n>>> [对抗生成] 执行受物理约束的高强度 PGD 算法 (epsilon={epsilon})...")
     torch.backends.cudnn.enabled = False
     model.eval()
     
@@ -135,9 +143,7 @@ def pgd_attack(model, X, y, epsilon=0.8, alpha=0.1, num_iter=10):
         
         with torch.no_grad():
             adv_step = alpha * X_adv.grad.sign()
-            
-            # 核心物理约束：前3维为动力学特征(速率与抖动)，攻击者无法随意篡改而不损失攻击效用
-            # 强制将这3维的对抗扰动梯度置零
+            # 物理约束：禁止篡改前3维动力学特征
             adv_step[:, 0:3] = 0
             
             X_adv = X_adv + adv_step
