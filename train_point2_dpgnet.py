@@ -85,19 +85,19 @@ class DynBranchGRU(nn.Module):
 
 # ================= 3. 核心架构：DPDADFE (含隐式丢弃修正) =================
 class DPG_Net(nn.Module):
-    # 将丢弃率下调至 0.5，平衡洁净状态与对抗状态的权重分布
-    def __init__(self, dist_drop_p=0.5): 
+    def __init__(self, dist_drop_p=0.6): # 微调至0.6，寻找洁净与对抗的最佳平衡
         super(DPG_Net, self).__init__()
         self.dynamics_branch = DynBranchGRU(in_features=3, hidden_dim=16)
         self.dist_branch = DistBranchDCN(in_features=6, embed_dim=32, num_layers=2)
         
         self.dist_drop_p = dist_drop_p
         
-        # 核心修改：将单层分类器升级为非线性缓冲分类器
-        # 增强模型在高维特征受到 PGD 干扰时的决策容错率
+        # ====== 核心修改：引入 Tanh 饱和激活函数 ======
+        # 物理意义：为分布特征的对抗扰动设定绝对的“影响天花板”
+        # 当 PGD 疯狂篡改分布特征时，Tanh 会将其强行钳制在 [-1, 1]
         self.classifier = nn.Sequential(
             nn.Linear(48, 32),
-            nn.ReLU(),
+            nn.Tanh(),  # 绝杀！替换原本无界的 ReLU
             nn.Linear(32, 1)
         )
         self.sigmoid = nn.Sigmoid()
@@ -106,7 +106,7 @@ class DPG_Net(nn.Module):
         out_dyn = self.dynamics_branch(x[:, 0:3])
         out_dist = self.dist_branch(x[:, 3:9])
         
-        # 模态级隐式丢弃机制
+        # 模态级隐式丢弃
         if self.training:
             mask = (torch.rand(out_dist.size(0), 1, device=out_dist.device) > self.dist_drop_p).float()
             out_dist_dropped = out_dist * mask / (1.0 - self.dist_drop_p)
@@ -116,7 +116,6 @@ class DPG_Net(nn.Module):
         h_concat = torch.cat((out_dyn, out_dist_dropped), dim=1)
         out = self.sigmoid(self.classifier(h_concat))
         return out
-
 # ================= PGD 攻击 (含物理约束修正) =================
 def pgd_attack(model, X, y, epsilon=0.8, alpha=0.2, num_iter=20):
     # 增加 num_iter=20 和 alpha=0.2，确保对抗噪声足以将分布特征推入 ReLU 的死区(Dead Zone)
@@ -213,7 +212,7 @@ def main():
     # 2. 模型训练
     print(f"\n>>> [阶段 2/4] DPG-Net 模型训练...")
     train_loader = DataLoader(TrafficDataset(X_train, y_train), batch_size=BATCH_SIZE, shuffle=True)
-    model = DPG_Net(dist_drop_p=0.5).to(DEVICE)
+    model = DPG_Net(dist_drop_p=0.6).to(DEVICE)
     optimizer = optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=1e-4)
     criterion = nn.BCELoss()
     
