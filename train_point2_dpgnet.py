@@ -203,28 +203,33 @@ def evaluate_model(model, test_loader):
 
 def run_shap_analysis(model, X_test):
     print("\n>>> [阶段 4/4] SHAP 解释性归因分析...")
-    print("  [提示] SHAP 正在计算高维空间的特征梯度，这可能需要 1-3 分钟，请稍候...")
+    print("  [提示] 正在使用 GradientExplainer 计算高维特征梯度，这可能需要 1-3 分钟，请稍候...")
     
     model.eval()  
-    
-    # ================= 核心修复 =================
-    # 临时禁用 cuDNN 加速，强制保留 GRU 的反向传播计算图
-    # 解决 "cudnn RNN backward can only be called in training mode" 错误
+    # 继续保持禁用 cuDNN 加速，以支持 GRU 的反向传播图提取
     torch.backends.cudnn.enabled = False
-    # ============================================
     
     # 抽取背景样本和待解释样本
     bg_data = torch.tensor(X_test[np.random.choice(X_test.shape[0], 100, replace=False)], dtype=torch.float32).to(DEVICE)
     test_data = torch.tensor(X_test[np.random.choice(X_test.shape[0], 200, replace=False)], dtype=torch.float32).to(DEVICE)
     
     start_time = time.time()
-    explainer = shap.DeepExplainer(model, bg_data)
+    
+    # ================= 核心修复 =================
+    # 弃用 DeepExplainer，改用 GradientExplainer
+    # 完美解决由于 DCN 显式交叉层张量乘法 (x0 * cross) 导致的加和属性(Additivity)崩溃问题
+    explainer = shap.GradientExplainer(model, bg_data)
     shap_values = explainer.shap_values(test_data)
+    
+    # 针对 PyTorch 单节点输出，GradientExplainer 可能返回包含单元素的 list，此处做解包处理
+    if isinstance(shap_values, list):
+        shap_values = shap_values[0]
+    # ============================================
+    
     end_time = time.time()
     
-    # ================= 恢复配置 =================
+    # 恢复环境配置
     torch.backends.cudnn.enabled = True
-    # ============================================
     
     print(f"  [+] SHAP 计算完成，耗时: {end_time - start_time:.2f}s")
 
@@ -254,7 +259,7 @@ def run_shap_analysis(model, X_test):
     plt.savefig("shap_beeswarm_real.png", dpi=300, bbox_inches='tight')
     
     print(f"\n[任务完成] 所有结果已保存至当前目录。")
-
+    
 if __name__ == "__main__":
     trained_model, test_loader, X_test_raw = train_model()
     evaluate_model(trained_model, test_loader)
