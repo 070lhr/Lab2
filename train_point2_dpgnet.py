@@ -33,8 +33,8 @@ EPOCHS = 50
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 FEATURE_COLS = [
-    'Rate', 'Rate_Accel', 'Rate_CV',           # 前3维：动力学流 
-    'SIP_Ent', 'SIPEnt_Change', 'SIPEnt_MA',   # 后6维：分布流
+    'Rate', 'Rate_Accel', 'Rate_CV',           # 动力学流 
+    'SIP_Ent', 'SIPEnt_Change', 'SIPEnt_MA',   # 分布流
     'Size_Std', 'SizeStd_Change', 'SizeStd_MA' 
 ]
 # ===========================================
@@ -83,42 +83,31 @@ class DynBranchGRU(nn.Module):
         output, hidden = self.gru(x)
         return hidden.squeeze(0)
 
-# ================= 3. 核心架构：DPDADFE (含隐式丢弃修正) =================
+# ================= 3. 核心架构：DPDADFE (回归论文纯粹数学设计) =================
 class DPG_Net(nn.Module):
-    def __init__(self, dist_drop_p=0.6): # 微调至0.6，寻找洁净与对抗的最佳平衡
+    def __init__(self, dropout_rate=0.3): # 回归 0.3 的温和丢弃率
         super(DPG_Net, self).__init__()
         self.dynamics_branch = DynBranchGRU(in_features=3, hidden_dim=16)
         self.dist_branch = DistBranchDCN(in_features=6, embed_dim=32, num_layers=2)
         
-        self.dist_drop_p = dist_drop_p
+        # 严格对应公式 (4-18): 隐式特征丢弃正则化机制，作用于联合特征
+        self.fusion_dropout = nn.Dropout(p=dropout_rate)
         
-        # ====== 核心修改：引入 Tanh 饱和激活函数 ======
-        # 物理意义：为分布特征的对抗扰动设定绝对的“影响天花板”
-        # 当 PGD 疯狂篡改分布特征时，Tanh 会将其强行钳制在 [-1, 1]
-        self.classifier = nn.Sequential(
-            nn.Linear(48, 32),
-            nn.Tanh(),  # 绝杀！替换原本无界的 ReLU
-            nn.Linear(32, 1)
-        )
+        # 严格对应公式 (4-19): 单层线性映射
+        self.classifier = nn.Linear(48, 1) 
         self.sigmoid = nn.Sigmoid()
 
     def forward(self, x):
         out_dyn = self.dynamics_branch(x[:, 0:3])
         out_dist = self.dist_branch(x[:, 3:9])
         
-        # 模态级隐式丢弃
-        if self.training:
-            mask = (torch.rand(out_dist.size(0), 1, device=out_dist.device) > self.dist_drop_p).float()
-            out_dist_dropped = out_dist * mask / (1.0 - self.dist_drop_p)
-        else:
-            out_dist_dropped = out_dist
-        
-        h_concat = torch.cat((out_dyn, out_dist_dropped), dim=1)
-        out = self.sigmoid(self.classifier(h_concat))
+        h_concat = torch.cat((out_dyn, out_dist), dim=1)
+        h_drop = self.fusion_dropout(h_concat)
+        out = self.sigmoid(self.classifier(h_drop))
         return out
+
 # ================= PGD 攻击 (含物理约束修正) =================
 def pgd_attack(model, X, y, epsilon=0.8, alpha=0.2, num_iter=20):
-    # 增加 num_iter=20 和 alpha=0.2，确保对抗噪声足以将分布特征推入 ReLU 的死区(Dead Zone)
     print(f"\n>>> [对抗生成] 执行受物理约束的高强度 PGD 算法 (epsilon={epsilon})...")
     torch.backends.cudnn.enabled = False
     model.eval()
@@ -127,7 +116,6 @@ def pgd_attack(model, X, y, epsilon=0.8, alpha=0.2, num_iter=20):
     y_tensor = torch.tensor(y, dtype=torch.float32).unsqueeze(1).to(DEVICE)
     criterion = nn.BCELoss()
 
-    # 初始扰动仅施加在后6维的分布特征上
     delta = torch.zeros_like(X_tensor)
     delta[:, 3:9].uniform_(-epsilon, epsilon)
     X_adv = X_tensor + delta
@@ -145,9 +133,7 @@ def pgd_attack(model, X, y, epsilon=0.8, alpha=0.2, num_iter=20):
         
         with torch.no_grad():
             adv_step = alpha * X_adv.grad.sign()
-            # 物理约束：禁止篡改前3维动力学特征
-            adv_step[:, 0:3] = 0
-            
+            adv_step[:, 0:3] = 0 # 物理约束：动力学特征不被篡改
             X_adv = X_adv + adv_step
             eta = torch.clamp(X_adv - X_tensor, min=-epsilon, max=epsilon)
             X_adv = X_tensor + eta
@@ -156,23 +142,27 @@ def pgd_attack(model, X, y, epsilon=0.8, alpha=0.2, num_iter=20):
     torch.backends.cudnn.enabled = True
     return X_adv.cpu().numpy()
 
-# ================= SHAP 可视化分析函数 =================
+# ================= SHAP 可视化分析函数 (KernelExplainer) =================
 def generate_shap_plots(model, X_test, bg_data, title_prefix, file_suffix):
-    torch.backends.cudnn.enabled = False
     model.eval()
-    
-    print(f"  [*] 正在计算 {title_prefix} 环境的 SHAP 梯度，请稍候...")
+    print(f"  [*] 正在计算 {title_prefix} 环境的 SHAP 归因，请稍候...")
     start_time = time.time()
-    explainer = shap.GradientExplainer(model, bg_data)
-    shap_values = explainer.shap_values(X_test)
     
+    def predict_fn(x_numpy):
+        with torch.no_grad():
+            x_tensor = torch.tensor(x_numpy, dtype=torch.float32).to(DEVICE)
+            return model(x_tensor).cpu().numpy()
+    
+    # 聚类加速黑盒测算
+    bg_summary = shap.kmeans(bg_data.cpu().numpy(), 15)
+    explainer = shap.KernelExplainer(predict_fn, bg_summary)
+    
+    shap_values = explainer.shap_values(X_test.cpu().numpy(), silent=True)
     if isinstance(shap_values, list):
         shap_values = shap_values[0]
         
     print(f"  [+] SHAP 计算完成，耗时: {time.time() - start_time:.2f}s")
-    torch.backends.cudnn.enabled = True
 
-    # 字体配置
     try:
         fm.fontManager.addfont(SIMSUN_FONT_PATH)
         fm.fontManager.addfont(TIMES_FONT_PATH)
@@ -192,11 +182,9 @@ def generate_shap_plots(model, X_test, bg_data, title_prefix, file_suffix):
     shap.summary_plot(shap_values, X_test.cpu().numpy(), feature_names=FEATURE_COLS, show=False)
     plt.savefig(f"shap_beeswarm_{file_suffix}.png", dpi=300, bbox_inches='tight')
     plt.close()
-    print(f"  [+] 图表已保存为 shap_bar_{file_suffix}.png 和 shap_beeswarm_{file_suffix}.png")
 
 # ================= 主控制流程 =================
 def main():
-    # 1. 数据预处理
     print("\n>>> [阶段 1/4] 数据预处理与标准化...")
     df_flash = pd.read_csv(FLASH_FILE)
     df_ddos = pd.read_csv(DDOS_FILE)
@@ -207,12 +195,11 @@ def main():
     scaler = StandardScaler()
     X_train = scaler.fit_transform(X_train)
     X_test_clean = scaler.transform(X_test_clean)
-    joblib.dump(scaler, SCALER_SAVE_PATH)
     
     # 2. 模型训练
     print(f"\n>>> [阶段 2/4] DPG-Net 模型训练...")
     train_loader = DataLoader(TrafficDataset(X_train, y_train), batch_size=BATCH_SIZE, shuffle=True)
-    model = DPG_Net(dist_drop_p=0.6).to(DEVICE)
+    model = DPG_Net(dropout_rate=0.3).to(DEVICE) # 恢复 0.3
     optimizer = optim.AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=1e-4)
     criterion = nn.BCELoss()
     
@@ -233,9 +220,10 @@ def main():
         y_pred_clean = (outputs_clean > 0.5).cpu().numpy()
     print(classification_report(y_test, y_pred_clean, target_names=['Flash', 'DDoS'], digits=4))
     
-    bg_data = torch.tensor(X_test_clean[np.random.choice(X_test_clean.shape[0], 100, replace=False)], dtype=torch.float32).to(DEVICE)
+    # 【关键逻辑】：Clean 状态的解释，背景和测试集都是 Clean 数据
+    bg_data_clean = torch.tensor(X_test_clean[np.random.choice(X_test_clean.shape[0], 100, replace=False)], dtype=torch.float32).to(DEVICE)
     test_data_clean = torch.tensor(X_test_clean[np.random.choice(X_test_clean.shape[0], 200, replace=False)], dtype=torch.float32).to(DEVICE)
-    generate_shap_plots(model, test_data_clean, bg_data, "洁净", "clean")
+    generate_shap_plots(model, test_data_clean, bg_data_clean, "洁净", "clean")
 
     # 4. 对抗环境性能评估与 SHAP
     print("\n>>> [阶段 4/4] 对抗环境：极限扰动场景评估...")
@@ -245,8 +233,10 @@ def main():
         y_pred_adv = (outputs_adv > 0.5).cpu().numpy()
     print(classification_report(y_test, y_pred_adv, target_names=['Flash', 'DDoS'], digits=4))
     
+    # 【核心绝杀逻辑】：Adv 状态的解释，背景必须也是 Adv 数据！
+    bg_data_adv = torch.tensor(X_test_adv[np.random.choice(X_test_adv.shape[0], 100, replace=False)], dtype=torch.float32).to(DEVICE)
     test_data_adv = torch.tensor(X_test_adv[np.random.choice(X_test_adv.shape[0], 200, replace=False)], dtype=torch.float32).to(DEVICE)
-    generate_shap_plots(model, test_data_adv, bg_data, "对抗", "adv")
+    generate_shap_plots(model, test_data_adv, bg_data_adv, "对抗", "adv")
     
     print("\n[任务完成] 祝你大论文图表绘制顺利！")
 
