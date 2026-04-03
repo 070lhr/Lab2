@@ -205,7 +205,13 @@ def run_shap_analysis(model, X_test):
     print("\n>>> [阶段 4/4] SHAP 解释性归因分析...")
     print("  [提示] SHAP 正在计算高维空间的特征梯度，这可能需要 1-3 分钟，请稍候...")
     
-    model.eval()  # 确保在计算 SHAP 前关闭 Dropout，保证梯度回传的稳定性
+    model.eval()  
+    
+    # ================= 核心修复 =================
+    # 临时禁用 cuDNN 加速，强制保留 GRU 的反向传播计算图
+    # 解决 "cudnn RNN backward can only be called in training mode" 错误
+    torch.backends.cudnn.enabled = False
+    # ============================================
     
     # 抽取背景样本和待解释样本
     bg_data = torch.tensor(X_test[np.random.choice(X_test.shape[0], 100, replace=False)], dtype=torch.float32).to(DEVICE)
@@ -215,6 +221,10 @@ def run_shap_analysis(model, X_test):
     explainer = shap.DeepExplainer(model, bg_data)
     shap_values = explainer.shap_values(test_data)
     end_time = time.time()
+    
+    # ================= 恢复配置 =================
+    torch.backends.cudnn.enabled = True
+    # ============================================
     
     print(f"  [+] SHAP 计算完成，耗时: {end_time - start_time:.2f}s")
 
