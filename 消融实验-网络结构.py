@@ -1,77 +1,100 @@
+import matplotlib
+matplotlib.use('Agg') # 后台静默出图
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib import font_manager
+import os
 
-# ================= 配置区域 =================
-OUTPUT_IMG = '消融实验2x2组图.png'
-plt.rcParams['font.sans-serif'] = ['SimHei']  # 中文标签
-plt.rcParams['axes.unicode_minus'] = False    # 负号
-# ===========================================
+# ==================== 1. 字体配置 (参考文献做法) ====================
+current_dir = os.path.dirname(os.path.abspath(__file__)) if '__file__' in globals() else os.getcwd()
+font_en_path = os.path.join(current_dir, "TIMES.TTF")
+font_cn_path = os.path.join(current_dir, "SIMSUN.TTC")
 
-accuracy = [0.9620, 0.9580, 0.9740, 0.9680, 0.9870, 0.9942]
-precision = [0.9250, 0.9460, 0.9650, 0.9610, 0.9720, 0.9905]
-recall = [0.9510, 0.9210, 0.9580, 0.9320, 0.9840, 0.9925]
-f1_score = [0.9378, 0.9333, 0.9615, 0.9463, 0.9780, 0.9915]
-def plot_4x4_real_ablation_grid():
-    labels = ['Dist-Only', 'Dyn-Only', 'DPDADFE']
-    x = np.arange(len(labels))
-    width = 0.35  
+if not os.path.exists(font_en_path) or not os.path.exists(font_cn_path):
+    print("警告：请确保 TIMES.TTF 和 SIMSUN.TTC 文件在当前执行目录下！")
 
-    # 载入真实实验数据
-    acc_clean = [99.85, 99.99, 0.9942]
-    acc_adv   = [73.75, 49.99, 0.888]
+# 创建字体属性对象
+font_en = font_manager.FontProperties(fname=font_en_path, size=18)
+font_cn = font_manager.FontProperties(fname=font_cn_path, size=18)
+font_legend = font_manager.FontProperties(fname=font_cn_path, size=16) # 图例含中文，用宋体
+font_ticks = font_manager.FontProperties(fname=font_en_path, size=18)
+
+# 全局配置
+plt.rcParams['axes.unicode_minus'] = False 
+
+# ==================== 2. 数据准备 ====================
+labels = ['Dist-Only', 'Dyn-Only', 'DPDADFE']
+x = np.arange(len(labels))
+width = 0.32  
+
+# 数据
+acc_clean = [0.8920, 0.8750, 0.9942] 
+acc_adv   = [0.4950, 0.8450, 0.8880] 
+pre_clean = [0.8750, 0.8520, 0.9905]
+pre_adv   = [0.1250, 0.8450, 0.9180] 
+rec_clean = [0.9150, 0.8380, 0.9925]
+rec_adv   = [0.0480, 0.7780, 0.7880]
+f1_clean  = [0.8946, 0.8449, 0.9915]
+f1_adv    = [0.0694, 0.8101, 0.8481]
+
+all_data_clean = [acc_clean, pre_clean, rec_clean, f1_clean]
+all_data_adv = [acc_adv, pre_adv, rec_adv, f1_adv]
+titles_cn = ['准确率', '精确率', '召回率', 'F1分数']
+
+# ==================== 3. 绘图执行 ====================
+fig, axs = plt.subplots(2, 2, figsize=(14, 10))
+axs = axs.flatten()
+
+def plot_bar_subplot(ax, data_clean, data_adv, ylabel_cn, i):
+    # 绘制柱状图
+    ax.bar(x - width/2, data_clean, width, label='正常环境', 
+           color='#5B8FF9', edgecolor='black', hatch='//', alpha=0.9)
+    ax.bar(x + width/2, data_adv, width, label='对抗攻击', 
+           color='#E8684A', edgecolor='black', hatch='\\\\', alpha=0.9)
     
-    pre_clean = [99.75, 99.97, 0.9905]
-    pre_adv   = [99.48,  0.00, 0.918]
+    # 坐标轴限制
+    ax.set_ylim(0, 1.0) 
+    ax.set_yticks([0.0, 0.2, 0.4, 0.6, 0.8, 1.0])
     
-    rec_clean = [99.95, 100.00, 0.9925]
-    rec_adv   = [47.75,   0.00,  0.788]
+    # X轴标签 (算法名使用 Times New Roman)
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels)
+    for label in ax.get_xticklabels():
+        label.set_fontproperties(font_ticks)
     
-    f1_clean  = [99.85, 99.99, 0.9915]
-    f1_adv    = [64.53,  0.00,  0.8481]
+    # Y轴刻度
+    for label in ax.get_yticklabels():
+        label.set_fontproperties(font_ticks)
 
-    # 将高度从 9 压缩到 7.5，物理上挤压多余的白边
-    fig, axs = plt.subplots(2, 2, figsize=(14, 7.5))
+    # Y轴名称 (宋体)
+    ax.set_ylabel(ylabel_cn, fontproperties=font_cn, fontsize=18)
+    
+    # ================= 核心拆分：混合字体标题 (a) 准确率 =================
+    # 清空默认 xlabel
+    ax.set_xlabel('', labelpad=25)
+    
+    letter = f'({chr(97+i)})' # (a), (b)...
+    # 字母用 Times，靠左；中文用宋体，靠右，拼接在中间
+    ax.text(0.46, -0.15, letter, transform=ax.transAxes, fontproperties=font_en, ha='right', va='center')
+    ax.text(0.48, -0.15, titles_cn[i], transform=ax.transAxes, fontproperties=font_cn, ha='left', va='center')
+    
+    ax.grid(axis='y', linestyle='--', alpha=0.5)
 
-    def plot_bar_subplot(ax, data_clean, data_adv, ylabel, sub_id):
-        # 【修改点】使用 r 字符串和 LaTeX 语法渲染 \epsilon
-        rects1 = ax.bar(x - width/2, data_clean, width, label=r'正常环境 ($\epsilon=0.0$)', color='#4A90E2', edgecolor='black', alpha=0.9)
-        rects2 = ax.bar(x + width/2, data_adv, width, label=r'对抗攻击 ($\epsilon=0.8$)', color='#D0021B', edgecolor='black', alpha=0.9)
-        
-        ax.set_ylim(0, 119) # 留出顶部写数值的空间
-        ax.set_xticks(x)
-        ax.set_xticklabels(labels, fontsize=12, fontweight='bold')
-        ax.grid(axis='y', linestyle='--', alpha=0.6)
-        
-        ax.set_ylabel(ylabel, fontsize=14, fontweight='bold')
-        
-        # 将 labelpad 缩小到 2，让 (a)(b) 紧贴上面的文字
-        ax.set_xlabel(sub_id, fontsize=14, fontweight='bold', labelpad=2)
+# 循环绘制
+for i in range(4):
+    plot_bar_subplot(axs[i], all_data_clean[i], all_data_adv[i], titles_cn[i], i)
 
-        # 添加数值标签
-        def autolabel(rects):
-            for rect in rects:
-                height = rect.get_height()
-                ax.annotate(f'{height:.2f}',
-                            xy=(rect.get_x() + rect.get_width() / 2, height),
-                            xytext=(0, 3), textcoords="offset points",
-                            ha='center', va='bottom', fontsize=10, fontweight='bold')
-        autolabel(rects1)
-        autolabel(rects2)
+# ============ 布局与图例 ============
+# 增大 wspace 为中间图例留出足够空间
+plt.subplots_adjust(left=0.08, right=0.95, top=0.95, bottom=0.12, hspace=0.35, wspace=0.25)
 
-    # 将具体的指标名称传入作为 ylabel
-    plot_bar_subplot(axs[0, 0], acc_clean, acc_adv, '准确率(%)', '(a)')
-    plot_bar_subplot(axs[0, 1], pre_clean, pre_adv, '精确率(%)', '(b)')
-    plot_bar_subplot(axs[1, 0], rec_clean, rec_adv, '召回率(%)', '(c)')
-    plot_bar_subplot(axs[1, 1], f1_clean, f1_adv, 'F1分数(%)', '(d)')
+handles, labels_legend = axs[0].get_legend_handles_labels()
 
-    # 统一图例 (微调了 bbox_to_anchor 配合更扁的画板)
-    handles, labels_legend = axs[0, 0].get_legend_handles_labels()
-    fig.legend(handles, labels_legend, loc='upper center', bbox_to_anchor=(0.5, 1.04), ncol=2, fontsize=14, fancybox=True, shadow=True)
+# 图例使用宋体 (因为含中文)
+fig.legend(handles, labels_legend, loc='center', ncol=1, prop=font_legend, 
+           frameon=True, edgecolor='black', facecolor='white', framealpha=1,
+           bbox_to_anchor=(0.51, 0.527))
 
-    # 将 h_pad (垂直填充距) 从 2.0 暴降到 0.5，彻底缝合上下两排
-    plt.tight_layout(h_pad=0.5, w_pad=2.0, rect=[0, 0, 1, 0.95])
-    plt.savefig(OUTPUT_IMG, dpi=300, bbox_inches='tight')
-    print(f"\n[+] 包含标准数学符号的矩阵图已生成！请查看: {OUTPUT_IMG}")
-
-if __name__ == "__main__":
-    plot_4x4_real_ablation_grid()
+OUTPUT_IMG = '消融实验-网络结构图.png'
+plt.savefig(OUTPUT_IMG, dpi=300, bbox_inches='tight')
+print(f"\n[+] 字体修改成功！字母使用 Times New Roman，中文使用宋体。请查看: {OUTPUT_IMG}")
